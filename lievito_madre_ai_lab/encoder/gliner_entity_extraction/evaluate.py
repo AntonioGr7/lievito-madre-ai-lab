@@ -100,7 +100,7 @@ def evaluate_split(
     pred_per_text: list[list[dict]] = []
     for start in range(0, len(texts), batch_size):
         chunk = texts[start : start + batch_size]
-        batch = model.batch_predict_entities(chunk, prompt_labels, threshold=threshold)
+        batch = model.inference(chunk, prompt_labels, threshold=threshold)
         for spans in batch:
             normalised = [
                 {

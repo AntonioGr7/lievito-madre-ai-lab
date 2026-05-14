@@ -38,21 +38,31 @@ class GLiNERTrainCfg:
 def _resolve_precision(precision: str) -> tuple[bool, bool, bool]:
     """Map `precision` string → (fp16, bf16, tf32) booleans for HF Trainer."""
     cuda = torch.cuda.is_available()
-    cap_major = torch.cuda.get_device_capability(0)[0] if cuda else 0
+    
+    # Check for Ampere (8.0) or newer (Hopper/Blackwell/etc)
+    can_do_tf32 = False
+    if cuda:
+        major, _ = torch.cuda.get_device_capability(0)
+        can_do_tf32 = (major >= 8)
 
     if precision == "auto":
-        if cuda and cap_major >= 8:
-            return False, True, True
+        if cuda and can_do_tf32:
+            return False, True, True  # BF16 + TF32 for Ampere
         if cuda:
-            return True, False, True
+            return True, False, False # FP16 for Turing/Pascal
         return False, False, False
 
     if precision == "bf16":
-        return False, True, cuda
+        # BF16 also requires Ampere+
+        return False, True, can_do_tf32
+    
     if precision == "fp16":
-        return True, False, cuda
+        # Even if on CUDA, only enable TF32 if the chip supports it
+        return True, False, can_do_tf32 
+        
     if precision == "fp32":
         return False, False, False
+        
     raise ValueError(f"unknown precision: {precision!r}")
 
 
