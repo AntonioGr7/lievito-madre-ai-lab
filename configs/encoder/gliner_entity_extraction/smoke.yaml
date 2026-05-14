@@ -1,0 +1,59 @@
+# Smoke config — pointed at the tiny fixture, runs end-to-end on CPU in <60s.
+processed_dir: tests/fixtures/gliner_tiny
+model_name: urchade/gliner_small-v2.1   # smallest GLiNER for fast smoke
+output_dir: outputs/_smoke
+experiment_id: smoke
+
+num_train_epochs: 1
+max_steps: -1
+per_device_train_batch_size: 2
+per_device_eval_batch_size: 2
+gradient_accumulation_steps: 1
+learning_rate: 1e-5
+weight_decay: 0.01
+warmup_ratio: 0.0
+max_grad_norm: 1.0
+lr_scheduler_type: linear
+optim: adamw_torch
+seed: 42
+
+eval_strategy: epoch
+save_strategy: epoch
+eval_steps: null
+save_steps: null
+load_best_model_at_end: false
+metric_for_best_model: eval_f1
+greater_is_better: true
+save_total_limit: 1
+early_stopping_patience: null
+eval_accumulation_steps: null
+
+precision: fp32
+gradient_checkpointing: false
+torch_compile: false
+train_sampling_strategy: random
+dataloader_num_workers: 0
+pad_to_multiple_of: 8
+
+logging_steps: 1
+report_to: "none"
+
+wandb_project: null
+wandb_run_name: null
+wandb_tags: []
+wandb_notes: null
+
+gliner:
+  max_span_width: 12
+  loss:
+    funcs: ["focal"]
+    focal_alpha: 0.75
+    focal_gamma: 2.0
+  sampling:
+    max_types: 8
+    max_neg_type_ratio: 1.0
+    random_drop: 0.0
+  head_lr_multiplier: 5.0
+  peft:
+    enabled: false
+  label_aliases: {}

@@ -1,0 +1,84 @@
+# Reference config — char-offset GLiNER fine-tuning on OpenPII.
+# Drop-in pattern: copy this file, edit processed_dir + wandb names, ship.
+
+processed_dir: data/processed/pii-gliner
+model_name: knowledgator/gliner-multitask-large-v0.5
+output_dir: outputs/pii_gliner
+experiment_id: gliner_exp_01
+
+# --- core training -----------------------------------------------------
+num_train_epochs: 3
+max_steps: -1
+per_device_train_batch_size: 8       # LoRA + grad-checkpointing fits 8 on T4
+per_device_eval_batch_size: 8
+gradient_accumulation_steps: 2       # effective batch = 16
+learning_rate: 1e-5                  # encoder LR; head_lr = lr × head_lr_multiplier
+weight_decay: 0.01
+warmup_ratio: 0.06
+max_grad_norm: 1.0
+lr_scheduler_type: linear
+optim: adamw_torch_fused
+seed: 42
+
+# --- eval & checkpointing ---------------------------------------------
+eval_strategy: epoch
+save_strategy: epoch
+eval_steps: null
+save_steps: null
+load_best_model_at_end: true
+metric_for_best_model: eval_f1       # populated by EvalCallback
+greater_is_better: true
+save_total_limit: 2
+early_stopping_patience: 2
+eval_accumulation_steps: null
+
+# --- compute / throughput ---------------------------------------------
+precision: auto                      # bf16 on Ampere+, fp16 on T4, fp32 on CPU
+gradient_checkpointing: true
+torch_compile: true
+train_sampling_strategy: random
+dataloader_num_workers: 4
+pad_to_multiple_of: 8
+
+logging_steps: 50
+report_to: wandb
+
+wandb_project: lievito-madre-ai-lab
+wandb_run_name: "pii-gliner-001"
+wandb_tags: []
+wandb_notes: null
+
+# --- GLiNER-specific knobs --------------------------------------------
+gliner:
+  max_span_width: 16                 # PII addresses can be long
+
+  loss:
+    funcs: ["focal"]                 # ["bce"] | ["focal"]
+    focal_alpha: 0.75
+    focal_gamma: 2.0
+
+  sampling:
+    max_types: 30
+    max_neg_type_ratio: 1.0
+    random_drop: 0.1
+
+  head_lr_multiplier: 5.0            # head LR = learning_rate × this
+
+  peft:
+    enabled: true
+    r: 16
+    alpha: 32
+    dropout: 0.1
+    target_modules: auto             # auto | [explicit module names]
+
+  label_aliases:                     # canonical → natural-language prompt
+    GIVENNAME: "given name"
+    SURNAME: "surname"
+    DRIVERLICENSENUM: "driver license number"
+    PASSPORTNUM: "passport number"
+    EMAIL: "email address"
+    PHONE: "phone number"
+    BUILDINGNUMBER: "building number"
+    STREET: "street name"
+    CITY: "city"
+    ZIPCODE: "zip code"

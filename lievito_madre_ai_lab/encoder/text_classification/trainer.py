@@ -1,0 +1,98 @@
+from __future__ import annotations
+
+import math
+
+from datasets import DatasetDict
+from transformers import (
+    AutoTokenizer,
+    DataCollatorWithPadding,
+    EarlyStoppingCallback,
+    PreTrainedModel,
+    Trainer,
+    TrainingArguments,
+)
+
+from lievito_madre_ai_lab.shared.config import TrainConfig
+
+
+
+def build_training_args(
+    cfg: TrainConfig,
+    *,
+    num_training_steps: int | None = None,
+) -> TrainingArguments:
+    # warmup_ratio is deprecated in transformers; convert to warmup_steps here.
+    warmup_steps = 0
+    if cfg.warmup_ratio > 0:
+        if num_training_steps is None:
+            raise ValueError(
+                "build_training_args requires num_training_steps when cfg.warmup_ratio > 0. "
+                "Compute it with shared.config.compute_total_training_steps()."
+            )
+        warmup_steps = math.ceil(num_training_steps * cfg.warmup_ratio)
+
+    return TrainingArguments(
+        output_dir=cfg.output_dir,
+        num_train_epochs=cfg.num_train_epochs,
+        max_steps=cfg.max_steps,
+        per_device_train_batch_size=cfg.per_device_train_batch_size,
+        per_device_eval_batch_size=cfg.per_device_eval_batch_size,
+        gradient_accumulation_steps=cfg.gradient_accumulation_steps,
+        learning_rate=cfg.learning_rate,
+        weight_decay=cfg.weight_decay,
+        warmup_steps=warmup_steps,
+        max_grad_norm=cfg.max_grad_norm,
+        lr_scheduler_type=cfg.lr_scheduler_type,
+        optim=cfg.optim,
+        seed=cfg.seed,
+        eval_strategy=cfg.eval_strategy,
+        save_strategy=cfg.save_strategy,
+        eval_steps=cfg.eval_steps,
+        save_steps=cfg.save_steps,
+        load_best_model_at_end=cfg.load_best_model_at_end,
+        metric_for_best_model=cfg.metric_for_best_model,
+        greater_is_better=cfg.greater_is_better,
+        save_total_limit=cfg.save_total_limit,
+        fp16=cfg.fp16,
+        bf16=cfg.bf16,
+        tf32=cfg.tf32,
+        gradient_checkpointing=cfg.gradient_checkpointing,
+        torch_compile=cfg.torch_compile,
+        train_sampling_strategy=cfg.train_sampling_strategy,
+        dataloader_num_workers=cfg.dataloader_num_workers,
+        logging_steps=cfg.logging_steps,
+        report_to=cfg.report_to,
+    )
+
+
+def build_trainer(
+    model: PreTrainedModel,
+    datasets: DatasetDict,
+    tokenizer: AutoTokenizer,
+    training_args: TrainingArguments,
+    compute_metrics,
+    *,
+    pad_to_multiple_of: int | None = 8,
+    early_stopping_patience: int | None = None,
+) -> Trainer:
+    eval_split = "validation" if "validation" in datasets else "test"
+
+    callbacks = []
+    if early_stopping_patience and early_stopping_patience > 0:
+        callbacks.append(
+            EarlyStoppingCallback(early_stopping_patience=early_stopping_patience)
+        )
+
+    return Trainer(
+        model=model,
+        args=training_args,
+        train_dataset=datasets["train"],
+        eval_dataset=datasets[eval_split],
+        processing_class=tokenizer,
+        # pad_to_multiple_of keeps tensor cores engaged under fp16/bf16.
+        data_collator=DataCollatorWithPadding(
+            tokenizer, pad_to_multiple_of=pad_to_multiple_of
+        ),
+        compute_metrics=compute_metrics,
+        callbacks=callbacks or None,
+    )

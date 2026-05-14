@@ -1,0 +1,48 @@
+processed_dir: data/processed/emotion
+model_name: answerdotai/ModernBERT-base
+output_dir: outputs/emotion_bert
+experiment_id: exp_01  # uncomment to save to outputs/emotion_bert/exp_01
+attn_implementation: sdpa  # "sdpa" | "flash_attention_2" | "eager"
+
+num_train_epochs: 3
+max_steps: -1                     # -1 = use num_train_epochs; >0 overrides epochs
+per_device_train_batch_size: 32
+per_device_eval_batch_size: 64
+gradient_accumulation_steps: 1
+learning_rate: 2e-5
+weight_decay: 0.01
+warmup_ratio: 0.1
+max_grad_norm: 1.0
+lr_scheduler_type: linear
+optim: adamw_torch_fused          # fused AdamW (PyTorch 2.x, ~15-20% faster)
+seed: 42
+
+eval_strategy: epoch              # "epoch" | "steps" | "no". Use "steps" with max_steps.
+save_strategy: epoch              # "epoch" | "steps" | "no". Must match eval_strategy if load_best_model_at_end.
+eval_steps: null                  # required when eval_strategy == "steps" (e.g. 100)
+save_steps: null                  # required when save_strategy == "steps" (must be a multiple of eval_steps)
+load_best_model_at_end: true
+metric_for_best_model: f1
+greater_is_better: true
+save_total_limit: 2
+early_stopping_patience: 2        # null disables; integer enables the callback
+
+# Mixed precision: pick one. bf16 is preferred on Ampere+/Hopper.
+fp16: true
+bf16: false
+tf32: null                        # null = PyTorch default; true forces TF32 on Ampere+
+
+gradient_checkpointing: false     # set true to cut memory ~40% at ~20% speed cost
+torch_compile: false              # true = 1.3-1.6× speedup; may need warmup on first step
+train_sampling_strategy: random   # "random" | "sequential" | "group_by_length"
+dataloader_num_workers: 2
+pad_to_multiple_of: 8             # keeps tensor cores fed under fp16/bf16
+
+logging_steps: 50
+report_to: wandb
+
+# Weights & Biases — only used when report_to is "wandb"
+wandb_project: lievito-madre-ai-lab
+wandb_run_name: "run-text-classification-001"
+wandb_tags: []
+wandb_notes: null
