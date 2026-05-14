@@ -1,0 +1,71 @@
+# T4 (16 GB) full fine-tuning — speed/quality sweet spot.
+# DeBERTa-v3-small backbone: comfortable FP16 fit, no checkpointing needed.
+# (T4 is Turing — no native BF16; medium-sized backbones need grad-ckpt + tiny batch.)
+
+processed_dir: data/processed/pii-gliner
+model_name: urchade/gliner_small-v2.1
+output_dir: outputs/t4_small
+experiment_id: t4_small_01
+
+# --- core training -----------------------------------------------------
+num_train_epochs: 3
+max_steps: -1
+per_device_train_batch_size: 8
+per_device_eval_batch_size: 8
+gradient_accumulation_steps: 2       # effective batch = 16
+learning_rate: 1e-5                  # small backbone tolerates the usual LR
+weight_decay: 0.01
+warmup_ratio: 0.06
+max_grad_norm: 1.0
+lr_scheduler_type: linear
+optim: adamw_torch_fused
+seed: 42
+
+# --- eval & checkpointing ---------------------------------------------
+eval_strategy: epoch
+save_strategy: epoch
+eval_steps: null
+save_steps: null
+load_best_model_at_end: true
+metric_for_best_model: eval_f1
+greater_is_better: true
+save_total_limit: 2
+early_stopping_patience: 2
+eval_accumulation_steps: null
+
+# --- compute / throughput ---------------------------------------------
+precision: fp16                      # T4 is Turing — no native BF16
+gradient_checkpointing: false        # not needed at this size on 16 GB
+torch_compile: false                 # Turing compile gains are small; keep it predictable
+train_sampling_strategy: random
+dataloader_num_workers: 2
+pad_to_multiple_of: 8
+
+logging_steps: 50
+report_to: wandb
+
+wandb_project: lievito-madre-ai-lab
+wandb_run_name: "t4-small-001"
+wandb_tags: ["t4", "full-ft", "gliner-small"]
+wandb_notes: null
+
+# --- GLiNER-specific knobs --------------------------------------------
+gliner:
+  max_span_width: 12
+
+  loss:
+    funcs: ["focal"]
+    focal_alpha: 0.75
+    focal_gamma: 2.0
+
+  sampling:
+    max_types: 30
+    max_neg_type_ratio: 1.0
+    random_drop: 0.1
+
+  head_lr_multiplier: 5.0            # head LR = learning_rate × this
+
+  peft:
+    enabled: false                   # full fine-tuning
+
+  label_aliases: {}
