@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import torch
-from transformers import AutoModelForTokenClassification, AutoTokenizer
+from transformers import AutoModelForTokenClassification, AutoTokenizer, PreTrainedTokenizerFast
 
 
 def load_model_and_tokenizer(
@@ -25,5 +25,17 @@ def load_model_and_tokenizer(
         attn_implementation=attn_implementation,
         dtype=torch.float32,
     )
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=True)
+    # Refuse slow tokenizers: save_pretrained on a slow tokenizer omits
+    # tokenizer.json, and reloading the saved dir later silently requires
+    # `sentencepiece` to convert slow→fast — a footgun we hit in production.
+    if not isinstance(tokenizer, PreTrainedTokenizerFast):
+        raise RuntimeError(
+            f"Tokenizer for {model_name!r} loaded as a slow tokenizer. "
+            "This usually means `sentencepiece` (or `tiktoken`) is missing in "
+            "the training environment, so HF can't build the fast tokenizer. "
+            "Install it (`pip install sentencepiece`) and re-run — otherwise "
+            "the saved checkpoint won't contain tokenizer.json and inference "
+            "will fail to load without sentencepiece installed too."
+        )
     return model, tokenizer

@@ -187,20 +187,45 @@ def main() -> None:
     final_dir = Path(cfg.output_dir) / "final"
     final_dir.mkdir(parents=True, exist_ok=True)
 
-    print("[5/5] Final evaluation on the test split …")
+    # Persist the model and preprocessing contract BEFORE running test eval.
+    # If we evaluated first, a crash mid-eval (bad sample, OOM, long span)
+    # would leave `final/` empty and the only recoverable artefact would be
+    # the last `checkpoint-N/` written by the Trainer.
+    model.save_pretrained(final_dir, safe_serialization=True)
+
+    # GLiNER's prep is tokenizer-agnostic — so unlike text/token classification
+    # the model_name and chunking config are decided here, at train time.
+    effective_max_words = (
+        train_cfg.chunk_max_words
+        if train_cfg.chunk_max_words is not None
+        else int(getattr(model.config, "max_len", 384))
+    )
+    prep_meta = load_preprocessing_meta(cfg.processed_dir) or {}
+    save_preprocessing_meta(
+        final_dir,
+        **prep_meta,            # carry over anything the prep script recorded
+        tokenizer=cfg.model_name,
+        max_words=effective_max_words,
+        stride=train_cfg.chunk_stride if train_cfg.chunk_stride >= 0 else None,
+        train_types=train_types,
+        holdout_types=holdout_types,
+    )
+    print(
+        f"      preprocessing.json written to {final_dir} "
+        f"(max_words={effective_max_words}, "
+        f"stride={train_cfg.chunk_stride if train_cfg.chunk_stride >= 0 else 'off'})"
+    )
+    print(f"Model saved -> {final_dir}")
+
+    print("[5/5] Final evaluation on the test split (model already saved) …")
     metrics: dict = {}
     if "test" in datasets:
         # Mirror the same chunking the trainer used so final test f1 is
         # computed on the same units that ``eval_f1`` tracked during training.
-        effective_max_words_for_eval = (
-            train_cfg.chunk_max_words
-            if train_cfg.chunk_max_words is not None
-            else int(getattr(model.config, "max_len", 384))
-        )
         test_for_eval = to_native_dataset(
             datasets["test"],
             model.data_processor.words_splitter,
-            max_words=effective_max_words_for_eval if train_cfg.chunk_stride >= 0 else None,
+            max_words=effective_max_words if train_cfg.chunk_stride >= 0 else None,
             stride=train_cfg.chunk_stride,
             desc="Chunking test for final evaluation",
         )
@@ -231,33 +256,6 @@ def main() -> None:
             ))
 
     (final_dir / "test_metrics.json").write_text(json.dumps(metrics, indent=2))
-    model.save_pretrained(final_dir, safe_serialization=True)
-
-    # Persist the preprocessing/inference contract next to the saved model so
-    # the predictor (and humans) can discover the exact chunking settings.
-    # GLiNER's prep is tokenizer-agnostic — so unlike text/token classification
-    # the model_name and chunking config are decided here, at train time.
-    effective_max_words = (
-        train_cfg.chunk_max_words
-        if train_cfg.chunk_max_words is not None
-        else int(getattr(model.config, "max_len", 384))
-    )
-    prep_meta = load_preprocessing_meta(cfg.processed_dir) or {}
-    save_preprocessing_meta(
-        final_dir,
-        **prep_meta,            # carry over anything the prep script recorded
-        tokenizer=cfg.model_name,
-        max_words=effective_max_words,
-        stride=train_cfg.chunk_stride if train_cfg.chunk_stride >= 0 else None,
-        train_types=train_types,
-        holdout_types=holdout_types,
-    )
-    print(
-        f"      preprocessing.json written to {final_dir} "
-        f"(max_words={effective_max_words}, "
-        f"stride={train_cfg.chunk_stride if train_cfg.chunk_stride >= 0 else 'off'})"
-    )
-    print(f"Model saved -> {final_dir}")
 
 
 if __name__ == "__main__":

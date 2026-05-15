@@ -158,16 +158,13 @@ def main() -> None:
     trainer.train(resume_from_checkpoint=args.resume)
 
     # ------------------------------------------------------------------
-    # 5. Final evaluation on the held-out test split
+    # 5. Persist the final artefacts BEFORE any further evaluation. Test-set
+    # eval can crash on a bad sample or OOM on long sequences; if we evaluated
+    # first, a crash would leave `final/` empty and the only recoverable model
+    # would be the last `checkpoint-N/` written by the Trainer.
     # ------------------------------------------------------------------
     final_dir = Path(cfg.output_dir) / "final"
     final_dir.mkdir(parents=True, exist_ok=True)
-
-    if "test" in datasets:
-        print("Evaluating on test split …")
-        metrics = trainer.evaluate(datasets["test"], metric_key_prefix="test")
-        print(json.dumps(metrics, indent=2))
-        (final_dir / "test_metrics.json").write_text(json.dumps(metrics, indent=2))
 
     trainer.save_model(str(final_dir))
     tokenizer.save_pretrained(str(final_dir))
@@ -185,6 +182,15 @@ def main() -> None:
               f"serve.py will fall back to its hardcoded defaults.")
 
     print(f"Model saved → {final_dir}")
+
+    # ------------------------------------------------------------------
+    # 6. Final evaluation on the held-out test split (model already saved)
+    # ------------------------------------------------------------------
+    if "test" in datasets:
+        print("Evaluating on test split …")
+        metrics = trainer.evaluate(datasets["test"], metric_key_prefix="test")
+        print(json.dumps(metrics, indent=2))
+        (final_dir / "test_metrics.json").write_text(json.dumps(metrics, indent=2))
 
 
 if __name__ == "__main__":
