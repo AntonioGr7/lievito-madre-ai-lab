@@ -57,6 +57,11 @@ gliner:
     funcs: ["focal"]
     focal_alpha: 0.75
     focal_gamma: 2.0
+    # "mean" | "sum". Under fp16, "sum" can produce gradients large enough
+    # to overflow the GradScaler (→ non-finite grad-norm crashes). T4 has no
+    # native BF16, so we use "mean" here for stability. If you switch back
+    # to "sum", expect to lower the LR by ~1-2 orders of magnitude.
+    reduction: mean
 
   sampling:
     max_types: 30

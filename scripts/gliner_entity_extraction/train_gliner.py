@@ -73,6 +73,17 @@ def _build_gliner_objects(gliner_cfg: dict) -> tuple[GLiNERTrainCfg, PeftConfig,
     # forward the alpha/gamma onto GLiNERTrainCfg → TrainingArguments.
     focal_on = "focal" in (loss.get("funcs") or [])
 
+    # `mean` divides the loss by the number of unmasked (span, type) cells,
+    # `sum` does not — under fp16 with many spans/types per chunk, `sum`
+    # produces gradients large enough to overflow the GradScaler. Default
+    # is kept as `sum` to preserve historical behaviour; switch to `mean`
+    # for fp16 stability (and retune LR up to compensate).
+    reduction = loss.get("reduction")
+    if reduction is not None and reduction not in {"mean", "sum"}:
+        raise ValueError(
+            f"gliner.loss.reduction must be 'mean' or 'sum'; got {reduction!r}"
+        )
+
     # Sliding-window chunking of long training docs (word-token level). The
     # YAML can pin chunk_max_words; if absent we let the trainer fall back to
     # model.config.max_len so we never exceed the model's truncation cap.
@@ -80,7 +91,7 @@ def _build_gliner_objects(gliner_cfg: dict) -> tuple[GLiNERTrainCfg, PeftConfig,
     chunk_max_words = chunk_cfg.get("max_words")
     chunk_stride = int(chunk_cfg.get("stride", 64))
 
-    train_cfg = GLiNERTrainCfg(
+    cfg_kwargs = dict(
         max_span_width=gliner_cfg.get("max_span_width"),
         head_lr_multiplier=float(gliner_cfg.get("head_lr_multiplier", 5.0)),
         focal_loss_alpha=float(loss.get("focal_alpha", 0.75)) if focal_on else -1.0,
@@ -88,6 +99,9 @@ def _build_gliner_objects(gliner_cfg: dict) -> tuple[GLiNERTrainCfg, PeftConfig,
         chunk_max_words=int(chunk_max_words) if chunk_max_words is not None else None,
         chunk_stride=chunk_stride,
     )
+    if reduction is not None:
+        cfg_kwargs["loss_reduction"] = reduction
+    train_cfg = GLiNERTrainCfg(**cfg_kwargs)
     return train_cfg, peft_cfg, loss, sampling, aliases
 
 

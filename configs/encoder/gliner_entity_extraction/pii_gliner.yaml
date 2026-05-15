@@ -56,6 +56,10 @@ gliner:
     funcs: ["focal"]                 # ["bce"] | ["focal"]
     focal_alpha: 0.75
     focal_gamma: 2.0
+    # "mean" | "sum". With precision: auto this config may land on fp16 (T4),
+    # where "sum" can overflow the GradScaler. "mean" is the portable choice;
+    # bump LR ~5-10× if you switch back to "sum".
+    reduction: mean
 
   sampling:
     max_types: 30

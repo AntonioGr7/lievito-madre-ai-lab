@@ -56,6 +56,11 @@ gliner:
     funcs: ["focal"]
     focal_alpha: 0.75
     focal_gamma: 2.0
+    # "mean" | "sum". BF16 keeps gradients finite even with "sum", so we
+    # preserve GLiNER's historical "sum" weighting (long/span-dense chunks
+    # contribute proportionally more). Switch to "mean" if loss spikes
+    # become a problem.
+    reduction: sum
 
   sampling:
     max_types: 30

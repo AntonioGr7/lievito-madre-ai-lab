@@ -49,6 +49,7 @@ gliner:
     funcs: ["focal"]
     focal_alpha: 0.75
     focal_gamma: 2.0
+    reduction: sum                   # "mean" | "sum" — fp32 here, no overflow risk
   sampling:
     max_types: 8
     max_neg_type_ratio: 1.0
