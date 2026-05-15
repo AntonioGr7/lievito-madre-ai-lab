@@ -1,6 +1,10 @@
 #!/usr/bin/env python
 """Download and preprocess a HuggingFace text-classification dataset for HF Trainer.
 
+This is the worked example targeting the dair-ai/emotion corpus.
+Copy this file, adapt it to your corpus, and place it anywhere outside
+`scripts/` — the train script only cares about the on-disk output.
+
 Steps
 -----
 1. Load the raw dataset from a configurable source (HF Hub, local disk, Google Drive)
@@ -11,19 +15,19 @@ Steps
 Usage examples
 --------------
 # Default: dair-ai/emotion from HF Hub, answerdotai/ModernBERT-base tokenizer
-python scripts/prepare_dataset.py
+python examples/text_classification/prepare_emotion.py
 
 # Different dataset
-python scripts/prepare_dataset.py --dataset-id cardiffnlp/tweet_eval --dataset-config sentiment
+python examples/text_classification/prepare_emotion.py --dataset-id cardiffnlp/tweet_eval --dataset-config sentiment
 
 # Use a local snapshot already on disk
-python scripts/prepare_dataset.py --source local --local-path data/raw/emotion
+python examples/text_classification/prepare_emotion.py --source local --local-path data/raw/emotion
 
 # Download from a shared Google Drive folder (Arrow format)
-python scripts/prepare_dataset.py --source drive --drive-id <FILE_ID> --drive-dest data/raw/emotion --drive-folder
+python examples/text_classification/prepare_emotion.py --source drive --drive-id <FILE_ID> --drive-dest data/raw/emotion --drive-folder
 
 # Change tokenizer and max sequence length
-python scripts/prepare_dataset.py --model roberta-base --max-length 64
+python examples/text_classification/prepare_emotion.py --model roberta-base --max-length 64
 """
 
 import argparse
@@ -38,7 +42,6 @@ DEFAULT_MAX_LEN = 128
 
 
 def dataset_slug(dataset_id: str) -> str:
-    """Turn 'dair-ai/emotion' into 'emotion' for use in directory names."""
     return dataset_id.split("/")[-1]
 
 

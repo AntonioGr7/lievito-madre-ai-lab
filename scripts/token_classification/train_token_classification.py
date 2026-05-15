@@ -89,7 +89,7 @@ def main() -> None:
     setup_wandb(cfg)
 
     # ------------------------------------------------------------------
-    # 1. Load the tokenized dataset produced by prepare_dataset.py
+    # 1. Load the tokenized dataset produced by a prepare script (see examples/)
     # ------------------------------------------------------------------
     print(f"[1/4] Loading processed dataset from '{cfg.processed_dir}' …")
     datasets = load_from_disk(cfg.processed_dir)

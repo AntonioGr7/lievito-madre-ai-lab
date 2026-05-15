@@ -3,8 +3,10 @@
 
 This is the worked example of the char-offset contract that
 `lievito_madre_ai_lab.encoder.gliner_entity_extraction.dataset` expects.
-Each per-corpus prepare_dataset.py you write should produce the same
-on-disk layout:
+Copy this file, adapt it to your corpus, and place it anywhere outside
+`scripts/` — the train script only cares about the on-disk output.
+
+Each per-corpus prepare script you write should produce the same on-disk layout:
 
   data/processed/<task>/
     train/, validation/, test/   <- HF DatasetDict shards
@@ -17,7 +19,7 @@ Row schema in every split:
 
 Usage
 -----
-python scripts/gliner_entity_extraction/prepare_dataset.py \\
+python examples/gliner_entity_extraction/prepare_openpii.py \\
     --out-dir data/processed/pii-gliner
 """
 import argparse

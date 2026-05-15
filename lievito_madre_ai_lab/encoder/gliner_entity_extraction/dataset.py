@@ -11,7 +11,7 @@ Each row in train / validation / test splits must have the shape::
       # any extra columns are silently kept (ignored by the trainer)
     }
 
-`prepare_dataset` scripts call `validate_row` before saving to surface schema
+Prepare scripts (see `examples/`) call `validate_row` before saving to surface schema
 bugs at prep time. `load_processed` reads the saved DatasetDict back, plus the
 two type files written alongside it.
 """
@@ -193,7 +193,7 @@ def load_processed(processed_dir: str | Path):
     train_types_path = processed_dir / "train_types.json"
     if not train_types_path.exists():
         raise FileNotFoundError(
-            f"missing {train_types_path}. Did prepare_dataset.py run to "
+            f"missing {train_types_path}. Did the prepare script run to "
             f"completion?"
         )
     train_types: list[str] = json.loads(train_types_path.read_text())

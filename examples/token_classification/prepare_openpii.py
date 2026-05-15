@@ -1,6 +1,10 @@
 #!/usr/bin/env python
 """Download and preprocess a token-classification dataset for HF Trainer.
 
+This is the worked example targeting the ai4privacy OpenPII corpus.
+Copy this file, adapt it to your corpus, and place it anywhere outside
+`scripts/` — the train script only cares about the on-disk output.
+
 Steps
 -----
 1. Load the raw dataset from a configurable source (HF Hub, local disk, Google Drive)
@@ -11,22 +15,22 @@ Steps
 Usage examples
 --------------
 # Default: ai4privacy PII dataset from HF Hub, bert-base-multilingual-cased tokenizer
-python scripts/token_classification/prepare_dataset.py
+python examples/token_classification/prepare_openpii.py
 
 # English only
-python scripts/token_classification/prepare_dataset.py --languages en
+python examples/token_classification/prepare_openpii.py --languages en
 
 # Multiple languages
-python scripts/token_classification/prepare_dataset.py --languages en,fr,de
+python examples/token_classification/prepare_openpii.py --languages en,fr,de
 
 # Use a local snapshot already on disk
-python scripts/token_classification/prepare_dataset.py --source local --local-path data/raw/pii
+python examples/token_classification/prepare_openpii.py --source local --local-path data/raw/pii
 
 # Different model tokenizer
-python scripts/token_classification/prepare_dataset.py --model xlm-roberta-base
+python examples/token_classification/prepare_openpii.py --model xlm-roberta-base
 
 # Only label the first subword of each entity (legacy HF recipe; default labels all)
-python scripts/token_classification/prepare_dataset.py --no-label-all-tokens
+python examples/token_classification/prepare_openpii.py --no-label-all-tokens
 """
 
 import argparse
