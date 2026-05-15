@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 
+import torch
 from datasets import DatasetDict
 from transformers import (
     AutoTokenizer,
@@ -14,6 +15,30 @@ from transformers import (
 
 from lievito_madre_ai_lab.shared.config import TrainConfig
 
+
+def _resolve_precision(precision: str) -> tuple[bool, bool, bool]:
+    """Resolve `precision` config string to (fp16, bf16, tf32) booleans.
+
+    auto: bf16 on cap>=8.0 CUDA, else fp16 on CUDA, else fp32 on CPU.
+    Explicit values map 1:1; tf32 is enabled whenever bf16/fp16 are on CUDA.
+    """
+    cuda = torch.cuda.is_available()
+    cap_major = torch.cuda.get_device_capability(0)[0] if cuda else 0
+
+    if precision == "auto":
+        if cuda and cap_major >= 8:
+            return False, True, True
+        if cuda:
+            return True, False, True
+        return False, False, False
+
+    if precision == "bf16":
+        return False, True, cuda
+    if precision == "fp16":
+        return True, False, cuda
+    if precision == "fp32":
+        return False, False, False
+    raise ValueError(f"unknown precision: {precision!r}")
 
 
 def build_training_args(
@@ -30,6 +55,8 @@ def build_training_args(
                 "Compute it with shared.config.compute_total_training_steps()."
             )
         warmup_steps = math.ceil(num_training_steps * cfg.warmup_ratio)
+
+    _fp16, _bf16, _tf32 = _resolve_precision(cfg.precision)
 
     return TrainingArguments(
         output_dir=cfg.output_dir,
@@ -53,9 +80,9 @@ def build_training_args(
         metric_for_best_model=cfg.metric_for_best_model,
         greater_is_better=cfg.greater_is_better,
         save_total_limit=cfg.save_total_limit,
-        fp16=cfg.fp16,
-        bf16=cfg.bf16,
-        tf32=cfg.tf32,
+        fp16=_fp16,
+        bf16=_bf16,
+        tf32=_tf32,
         gradient_checkpointing=cfg.gradient_checkpointing,
         torch_compile=cfg.torch_compile,
         train_sampling_strategy=cfg.train_sampling_strategy,
