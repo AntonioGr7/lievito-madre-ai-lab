@@ -1,4 +1,4 @@
-# lievito-madre-ai-lab
+# Lievito Madre AI LAB
 Lievito Madre isn't just an ingredient; it is a living, evolving ecosystem of knowledge. Here is where we cook.
 
 ---
