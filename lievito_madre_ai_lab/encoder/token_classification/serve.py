@@ -7,6 +7,8 @@ Same performance stack as text_classification/serve.py:
   CPU  │ FP32 weights (INT8 dynamic quantisation available via quantize_cpu=True,
        │ off by default — degrades accuracy on DeBERTa-V2 and small-margin heads)
   both │ torch.inference_mode · sort-by-length batching · batch-local padding
+       │ sliding-window chunking for inputs longer than max_length (stride=128
+       │ by default; matches the training preprocessing)
 
 Output — entity spans extracted from BIO predictions::
 
@@ -30,15 +32,26 @@ from __future__ import annotations
 import logging
 from contextlib import AbstractContextManager
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import torch
 import torch.nn as nn
 from transformers import AutoModelForTokenClassification, AutoTokenizer
 
+from lievito_madre_ai_lab.shared.preprocessing import load_preprocessing_meta
+
 log = logging.getLogger(__name__)
 
 _HAS_COMPILE = hasattr(torch, "compile")
+
+# Sentinel for "caller did not pass a value — pull it from preprocessing.json".
+# We can't use ``None`` because ``stride=None`` legitimately means "disable
+# chunking" and ``max_length=None`` is reserved for tokenizer defaults.
+_UNSET: Any = object()
+
+_DEFAULT_MAX_LENGTH = 512
+_DEFAULT_STRIDE = 128
 
 
 class TokenClassificationPredictor:
@@ -60,11 +73,31 @@ class TokenClassificationPredictor:
         amp_dtype: torch.dtype | None = None,
         quantize_cpu: bool = False,
         warmup_steps: int = 3,
-        max_length: int = 512,
+        max_length: Any = _UNSET,
+        stride: Any = _UNSET,
         attn_implementation: str = "eager",
     ) -> None:
         self.batch_size = batch_size
+
+        # Discover the preprocessing settings used at training time. Caller-
+        # provided max_length / stride still win; the metadata only fills in
+        # the gap when the caller didn't ask for anything explicit.
+        meta = load_preprocessing_meta(model_dir) or {}
+        if max_length is _UNSET:
+            max_length = meta.get("max_length", _DEFAULT_MAX_LENGTH)
+        if stride is _UNSET:
+            stride = meta.get("stride", _DEFAULT_STRIDE)
+        if not meta:
+            log.warning(
+                "no preprocessing.json in %s — falling back to max_length=%d "
+                "stride=%s. If the model was trained with different values, "
+                "pass them explicitly to TokenClassificationPredictor.",
+                model_dir, max_length, stride,
+            )
+
         self.max_length = max_length
+        # Sliding-window chunking for long inputs. None or <=0 disables.
+        self.stride = stride if (stride is not None and stride > 0) else None
         self.device = _resolve_device(device)
 
         self.tokenizer = AutoTokenizer.from_pretrained(model_dir, use_fast=True)
@@ -122,8 +155,10 @@ class TokenClassificationPredictor:
             self._warmup(warmup_steps)
 
         log.info(
-            "predictor ready │ device=%s  dtype=%s  compiled=%s  labels=%d",
+            "predictor ready │ device=%s  dtype=%s  compiled=%s  labels=%d  "
+            "max_length=%d  stride=%s",
             self.device, load_dtype, compiled, self.num_labels,
+            self.max_length, self.stride if self.stride is not None else "off",
         )
 
     # ── public API ────────────────────────────────────────────────────────────
@@ -180,39 +215,64 @@ class TokenClassificationPredictor:
 
     @torch.inference_mode()
     def _forward(self, texts: list[str]) -> list[list[dict]]:
-        enc = self.tokenizer(
-            texts,
+        tok_kwargs: dict = dict(
             padding=True,
             truncation=True,
             max_length=self.max_length,
             return_tensors="pt",
             return_offsets_mapping=True,   # needed for span extraction
         )
+        if self.stride is not None:
+            # Long inputs are split into overlapping chunks instead of being
+            # silently truncated. Each chunk produces its own (input_ids,
+            # attention_mask, offset_mapping); overflow_to_sample_mapping tells
+            # us which source text each chunk came from so we can stitch spans
+            # back together below.
+            tok_kwargs["stride"] = self.stride
+            tok_kwargs["return_overflowing_tokens"] = True
+
+        enc = self.tokenizer(texts, **tok_kwargs)
+
+        if self.stride is not None:
+            sample_map = enc.pop("overflow_to_sample_mapping").tolist()
+        else:
+            sample_map = list(range(len(texts)))
+
         offset_mapping = enc.pop("offset_mapping")          # keep on CPU
+        n_chunks = len(sample_map)
         # word_ids is the canonical subword→word grouping from the Fast tokenizer.
         # It must be read BEFORE we convert enc to a plain dict, since BatchEncoding
         # methods don't survive. Robust across WordPiece (mBERT) and SentencePiece
         # (mDeBERTa, XLM-R) — unlike offset contiguity, where the leading "▁" of
         # SentencePiece tokens eats the preceding space and falsely merges words.
-        word_ids_per_text = [enc.word_ids(batch_index=i) for i in range(len(texts))]
+        word_ids_per_chunk = [enc.word_ids(batch_index=i) for i in range(n_chunks)]
         enc = {k: v.to(self.device, non_blocking=True) for k, v in enc.items()}
 
         with self._amp_ctx:
-            logits = self._model(**enc).logits              # (B, T, num_labels)
+            logits = self._model(**enc).logits              # (n_chunks, T, num_labels)
 
-        probs = torch.softmax(logits.float(), dim=-1).cpu().numpy()  # (B, T, num_labels)
+        probs = torch.softmax(logits.float(), dim=-1).cpu().numpy()
 
-        results: list[list[dict]] = []
-        for i, text in enumerate(texts):
+        # Spans per chunk, in original-text char coords (HF Fast tokenizer
+        # preserves source offsets across overflow chunks).
+        per_text: list[list[dict]] = [[] for _ in texts]
+        for chunk_idx in range(n_chunks):
+            src_idx = sample_map[chunk_idx]
             spans = _tokens_to_spans(
-                text,
-                probs[i],
-                offset_mapping[i].tolist(),
-                word_ids_per_text[i],
+                texts[src_idx],
+                probs[chunk_idx],
+                offset_mapping[chunk_idx].tolist(),
+                word_ids_per_chunk[chunk_idx],
                 self.id2label,
             )
-            results.append(spans)
-        return results
+            per_text[src_idx].extend(spans)
+
+        # Merge adjacent / overlapping chunk outputs. With stride > 0 a span
+        # near a chunk boundary often appears twice (once truncated in chunk N,
+        # once whole in chunk N+1). _merge_overlapping_spans collapses these.
+        if self.stride is not None:
+            per_text = [_merge_overlapping_spans(s, texts[i]) for i, s in enumerate(per_text)]
+        return per_text
 
     def _warmup(self, n: int) -> None:
         dummy = ["warmup sentence"] * min(self.batch_size, 4)
@@ -353,6 +413,43 @@ def _finalize_word(
     return {"start": start, "end": end, "entity": entity, "score": score}
 
 
+def _merge_overlapping_spans(spans: list[dict], text: str) -> list[dict]:
+    """Stitch chunk-level spans back into one consistent set for the source text.
+
+    When a long document is split with stride > 0, an entity that sits in the
+    overlap region typically appears twice: once truncated at the chunk-1 tail,
+    once complete inside chunk 2. We merge same-label spans whose char ranges
+    touch or overlap by taking the outer bounds, keeping the higher confidence,
+    and re-slicing the merged ``text`` from the source string.
+
+    Different-label overlaps are left untouched — that's a real model
+    disagreement, not a chunking artefact, and downstream code can resolve it
+    if it wants to.
+    """
+    if not spans:
+        return spans
+    spans = sorted(spans, key=lambda s: (s["start"], -s["end"]))
+    merged: list[dict] = [dict(spans[0])]
+    for s in spans[1:]:
+        last = merged[-1]
+        same_label = s["label"] == last["label"]
+        # "<=" not "<": adjacent spans like [10,15] and [15,20] of the same
+        # label are also merged. Real entities don't end at exactly the byte
+        # another begins; this is almost always the chunk boundary biting.
+        if same_label and s["start"] <= last["end"]:
+            last["end"] = max(last["end"], s["end"])
+            last["score"] = max(last["score"], s["score"])
+            sliced = text[last["start"]:last["end"]]
+            stripped = sliced.strip()
+            shift = len(sliced) - len(sliced.lstrip())
+            last["start"] += shift
+            last["end"] = last["start"] + len(stripped)
+            last["text"] = stripped
+        else:
+            merged.append(dict(s))
+    return merged
+
+
 def _finalize_span(active: dict, text: str) -> dict:
     # SentencePiece "▁" tokens carry the preceding space inside their offset,
     # so a raw slice like " John" leaks whitespace into the span. Trim it.
@@ -404,7 +501,21 @@ if __name__ == "__main__":
     parser.add_argument("texts", nargs="*", help="Texts to run NER on")
     parser.add_argument("--device", default=None)
     parser.add_argument("--batch-size", type=int, default=16)
-    parser.add_argument("--max-length", type=int, default=512)
+    parser.add_argument(
+        "--max-length", type=int, default=None,
+        help=(
+            "Override the tokenizer max_length. By default the predictor uses "
+            "the value saved at training time (preprocessing.json)."
+        ),
+    )
+    parser.add_argument(
+        "--stride", type=int, default=None,
+        help=(
+            "Override the sliding-window overlap (in tokens) used for inputs "
+            "longer than max_length. Pass -1 to disable chunking. By default "
+            "the predictor uses the value saved at training time."
+        ),
+    )
     parser.add_argument("--no-compile", action="store_true")
     parser.add_argument(
         "--quantize",
@@ -423,14 +534,20 @@ if __name__ == "__main__":
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(message)s")
 
+    overrides: dict = {}
+    if args.max_length is not None:
+        overrides["max_length"] = args.max_length
+    if args.stride is not None:
+        overrides["stride"] = None if args.stride < 0 else args.stride
+
     predictor = TokenClassificationPredictor(
         args.model_dir,
         device=args.device,
         batch_size=args.batch_size,
-        max_length=args.max_length,
         use_compile=not args.no_compile,
         quantize_cpu=args.quantize,
         attn_implementation=args.attn_implementation,
+        **overrides,
     )
 
     texts = args.texts or [

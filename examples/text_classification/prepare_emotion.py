@@ -33,7 +33,10 @@ python examples/text_classification/prepare_emotion.py --model roberta-base --ma
 import argparse
 from pathlib import Path
 
-from lievito_madre_ai_lab.encoder.text_classification.dataset import tokenize_for_trainer
+from lievito_madre_ai_lab.encoder.text_classification.dataset import (
+    save_preprocessing_meta,
+    tokenize_for_trainer,
+)
 from lievito_madre_ai_lab.shared.sources import DriveSource, HFSource, LocalSource
 
 DEFAULT_DATASET_ID = "dair-ai/emotion"
@@ -135,7 +138,17 @@ def main() -> None:
     # ------------------------------------------------------------------
     out_dir.mkdir(parents=True, exist_ok=True)
     processed.save_to_disk(str(out_dir))
+    save_preprocessing_meta(
+        out_dir,
+        source=args.dataset_id,
+        tokenizer=args.model,
+        text_col=args.text_col,
+        label_col=args.label_col,
+        max_length=args.max_length,
+    )
     print(f"[3/3] Processed dataset saved → {out_dir}")
+    print(f"      preprocessing.json written (max_length={args.max_length}) "
+          f"so serve.py can rediscover the settings.")
 
 
 if __name__ == "__main__":

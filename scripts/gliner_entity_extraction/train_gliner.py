@@ -23,7 +23,10 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from lievito_madre_ai_lab.encoder.gliner_entity_extraction.dataset import load_processed
+from lievito_madre_ai_lab.encoder.gliner_entity_extraction.dataset import (
+    load_processed,
+    to_native_dataset,
+)
 from lievito_madre_ai_lab.encoder.gliner_entity_extraction.evaluate import evaluate_split
 from lievito_madre_ai_lab.encoder.gliner_entity_extraction.model import (
     PeftConfig,
@@ -37,6 +40,10 @@ from lievito_madre_ai_lab.encoder.gliner_entity_extraction.trainer import (
 from lievito_madre_ai_lab.shared.config import (
     TrainConfig,
     compute_total_training_steps,
+)
+from lievito_madre_ai_lab.shared.preprocessing import (
+    load_preprocessing_meta,
+    save_preprocessing_meta,
 )
 
 
@@ -65,11 +72,21 @@ def _build_gliner_objects(gliner_cfg: dict) -> tuple[GLiNERTrainCfg, PeftConfig,
     # Focal loss is opt-in via loss.funcs containing "focal". When enabled,
     # forward the alpha/gamma onto GLiNERTrainCfg → TrainingArguments.
     focal_on = "focal" in (loss.get("funcs") or [])
+
+    # Sliding-window chunking of long training docs (word-token level). The
+    # YAML can pin chunk_max_words; if absent we let the trainer fall back to
+    # model.config.max_len so we never exceed the model's truncation cap.
+    chunk_cfg = gliner_cfg.get("chunking", {}) or {}
+    chunk_max_words = chunk_cfg.get("max_words")
+    chunk_stride = int(chunk_cfg.get("stride", 64))
+
     train_cfg = GLiNERTrainCfg(
         max_span_width=gliner_cfg.get("max_span_width"),
         head_lr_multiplier=float(gliner_cfg.get("head_lr_multiplier", 5.0)),
         focal_loss_alpha=float(loss.get("focal_alpha", 0.75)) if focal_on else -1.0,
         focal_loss_gamma=float(loss.get("focal_gamma", 2.0)) if focal_on else 0.0,
+        chunk_max_words=int(chunk_max_words) if chunk_max_words is not None else None,
+        chunk_stride=chunk_stride,
     )
     return train_cfg, peft_cfg, loss, sampling, aliases
 
@@ -159,8 +176,23 @@ def main() -> None:
     print("[5/5] Final evaluation on the test split …")
     metrics: dict = {}
     if "test" in datasets:
+        # Mirror the same chunking the trainer used so final test f1 is
+        # computed on the same units that ``eval_f1`` tracked during training.
+        effective_max_words_for_eval = (
+            train_cfg.chunk_max_words
+            if train_cfg.chunk_max_words is not None
+            else int(getattr(model.config, "max_len", 384))
+        )
+        test_for_eval = to_native_dataset(
+            datasets["test"],
+            model.data_processor.words_splitter,
+            max_words=effective_max_words_for_eval if train_cfg.chunk_stride >= 0 else None,
+            stride=train_cfg.chunk_stride,
+            desc="Chunking test for final evaluation",
+        )
+
         closed = evaluate_split(
-            model, datasets["test"], labels=train_types,
+            model, test_for_eval, labels=train_types,
             label_aliases=label_aliases,
             batch_size=cfg.per_device_eval_batch_size,
         )
@@ -173,7 +205,7 @@ def main() -> None:
 
         if holdout_types:
             zero = evaluate_split(
-                model, datasets["test"], labels=holdout_types,
+                model, test_for_eval, labels=holdout_types,
                 label_aliases=label_aliases,
                 batch_size=cfg.per_device_eval_batch_size,
             )
@@ -186,6 +218,31 @@ def main() -> None:
 
     (final_dir / "test_metrics.json").write_text(json.dumps(metrics, indent=2))
     model.save_pretrained(final_dir, safe_serialization=True)
+
+    # Persist the preprocessing/inference contract next to the saved model so
+    # the predictor (and humans) can discover the exact chunking settings.
+    # GLiNER's prep is tokenizer-agnostic — so unlike text/token classification
+    # the model_name and chunking config are decided here, at train time.
+    effective_max_words = (
+        train_cfg.chunk_max_words
+        if train_cfg.chunk_max_words is not None
+        else int(getattr(model.config, "max_len", 384))
+    )
+    prep_meta = load_preprocessing_meta(cfg.processed_dir) or {}
+    save_preprocessing_meta(
+        final_dir,
+        **prep_meta,            # carry over anything the prep script recorded
+        tokenizer=cfg.model_name,
+        max_words=effective_max_words,
+        stride=train_cfg.chunk_stride if train_cfg.chunk_stride >= 0 else None,
+        train_types=train_types,
+        holdout_types=holdout_types,
+    )
+    print(
+        f"      preprocessing.json written to {final_dir} "
+        f"(max_words={effective_max_words}, "
+        f"stride={train_cfg.chunk_stride if train_cfg.chunk_stride >= 0 else 'off'})"
+    )
     print(f"Model saved -> {final_dir}")
 
 

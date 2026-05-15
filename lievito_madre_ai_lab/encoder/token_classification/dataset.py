@@ -3,6 +3,14 @@ from __future__ import annotations
 from datasets import ClassLabel, DatasetDict, Sequence
 from transformers import AutoTokenizer
 
+# Re-exported from shared/preprocessing.py so existing imports keep working.
+# The helpers themselves are task-agnostic — see that module for the format.
+from lievito_madre_ai_lab.shared.preprocessing import (  # noqa: F401
+    PREPROCESSING_META_FILE,
+    load_preprocessing_meta,
+    save_preprocessing_meta,
+)
+
 # Default vocabulary — matches ai4privacy/open-pii-masking-500k-ai4privacy.
 # When combining sources (Nemotron, Gretel, Privy, …) build the vocabulary
 # dynamically with ``collect_entity_types(raw)`` and pass it through.
@@ -56,10 +64,15 @@ def tokenize_for_trainer(
     label_all_tokens: bool = True,
     entity_types: list[str] | None = None,
     keep_columns: list[str] | None = None,
+    stride: int | None = 128,
 ) -> DatasetDict:
     """Tokenize a token-classification DatasetDict and return it ready for Trainer.
 
     - Tokenises `text_col` with return_offsets_mapping=True
+    - Documents longer than ``max_length`` are split into overlapping chunks
+      via ``return_overflowing_tokens`` so no tokens (or entity spans) are
+      silently dropped. Each chunk becomes its own row; ``stride`` controls
+      the overlap (set ``stride=None`` to fall back to plain truncation).
     - Aligns BIO labels from `mask_col` character spans to subword tokens:
         first subword of each entity span → B- label
         continuation subwords (default, label_all_tokens=True) → I- label
@@ -67,7 +80,8 @@ def tokenize_for_trainer(
       Default is True so the model gets training signal on every subword of an
       entity, producing cleaner BIO sequences at inference time.
     - Drops source columns (keep_columns lets callers preserve metadata such
-      as ``source`` for per-corpus evaluation), keeps input_ids, attention_mask, labels
+      as ``source`` for per-corpus evaluation, fanned out per chunk),
+      keeps input_ids, attention_mask, labels
     - Casts labels to Sequence(ClassLabel) so names survive save_to_disk()
 
     Parameters
@@ -77,8 +91,15 @@ def tokenize_for_trainer(
         ``ENTITY_TYPES`` (the OpenPII set). For combined corpora compute it
         once with ``collect_entity_types(raw)`` and pass it in.
     keep_columns
-        Source columns to preserve on the output (e.g. ``["source", "language"]``).
-        Defaults to dropping everything except the tokenizer outputs + labels.
+        Source columns to preserve on the output (e.g. ``["source", "language",
+        "uid"]``). Useful for per-corpus evaluation, and — combined with a
+        unique row id — for aggregating overflow chunks back to their source
+        document at eval time. Defaults to dropping everything except the
+        tokenizer outputs + labels.
+    stride
+        Number of overlapping tokens between consecutive chunks of a long
+        document. Default 128. Pass ``None`` to disable chunking (legacy
+        truncate-only behaviour); pass 0 to chunk with no overlap.
 
     Expected privacy_mask format per row::
 
@@ -88,33 +109,55 @@ def tokenize_for_trainer(
     label_names = build_label_names(entity_types)
     label2id = {label: i for i, label in enumerate(label_names)}
     valid_labels = frozenset(entity_types)
+    chunking = stride is not None
 
     tokenizer = AutoTokenizer.from_pretrained(model_name)
+    keep = list(keep_columns or [])
 
     def _tokenize(batch: dict) -> dict:
-        enc = tokenizer(
-            batch[text_col],
+        tok_kwargs = dict(
             truncation=True,
             max_length=max_length,
             padding=False,
             return_offsets_mapping=True,
             return_special_tokens_mask=True,
         )
+        if chunking:
+            tok_kwargs["stride"] = stride
+            tok_kwargs["return_overflowing_tokens"] = True
+
+        enc = tokenizer(batch[text_col], **tok_kwargs)
+
+        # Map each output chunk back to its source row within this batch so we
+        # can pull the right span list (and replicate any kept columns).
+        if chunking:
+            sample_map = enc.pop("overflow_to_sample_mapping")
+        else:
+            sample_map = list(range(len(batch[text_col])))
+
         enc["labels"] = [
-            _align_labels(mask, offsets, special_mask, label_all_tokens,
-                          valid_labels, label2id)
-            for mask, offsets, special_mask in zip(
-                batch[mask_col],
-                enc["offset_mapping"],
-                enc["special_tokens_mask"],
+            _align_labels(
+                batch[mask_col][src_idx],
+                offsets, special_mask,
+                label_all_tokens, valid_labels, label2id,
+            )
+            for src_idx, offsets, special_mask in zip(
+                sample_map, enc["offset_mapping"], enc["special_tokens_mask"],
             )
         ]
         del enc["offset_mapping"]
         del enc["special_tokens_mask"]
+
+        # Fan out kept source columns per chunk.
+        for col in keep:
+            if col in batch:
+                enc[col] = [batch[col][src_idx] for src_idx in sample_map]
+
         return enc
 
-    keep = set(keep_columns or [])
-    cols_to_remove = [c for c in raw["train"].column_names if c not in keep]
+    # With overflow, output row count differs from input — every source column
+    # must be dropped (and any kept ones are re-emitted by _tokenize above).
+    cols_to_remove = list(raw["train"].column_names)
     tokenized = raw.map(
         _tokenize,
         batched=True,

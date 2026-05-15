@@ -42,14 +42,22 @@ from __future__ import annotations
 import logging
 from contextlib import AbstractContextManager
 from pathlib import Path
+from typing import Any
 
 import torch
 import torch.nn as nn
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
+from lievito_madre_ai_lab.shared.preprocessing import load_preprocessing_meta
+
 log = logging.getLogger(__name__)
 
 _HAS_COMPILE = hasattr(torch, "compile")
+
+# Sentinel for "caller did not pass a value — pull it from preprocessing.json".
+_UNSET: Any = object()
+
+_DEFAULT_MAX_LENGTH = 128
 
 
 class TextClassificationPredictor:
@@ -96,9 +104,24 @@ class TextClassificationPredictor:
         amp_dtype: torch.dtype | None = None,
         quantize_cpu: bool = True,
         warmup_steps: int = 3,
-        max_length: int = 128,
+        max_length: Any = _UNSET,
     ) -> None:
         self.batch_size = batch_size
+
+        # Discover the tokenizer settings used at training time. Caller-provided
+        # max_length still wins; the metadata only fills in the gap when the
+        # caller didn't ask for anything explicit.
+        meta = load_preprocessing_meta(model_dir) or {}
+        if max_length is _UNSET:
+            max_length = meta.get("max_length", _DEFAULT_MAX_LENGTH)
+        if not meta:
+            log.warning(
+                "no preprocessing.json in %s — falling back to max_length=%d. "
+                "If the model was trained with a different value, pass it "
+                "explicitly to TextClassificationPredictor.",
+                model_dir, max_length,
+            )
+
         self.max_length = max_length
         self.device = _resolve_device(device)
 
@@ -148,11 +171,13 @@ class TextClassificationPredictor:
             self._warmup(warmup_steps)
 
         log.info(
-            "predictor ready │ device=%s  dtype=%s  compiled=%s  labels=%d",
+            "predictor ready │ device=%s  dtype=%s  compiled=%s  labels=%d  "
+            "max_length=%d",
             self.device,
             load_dtype,
             compiled,
             self.num_labels,
+            self.max_length,
         )
 
     # ── public API ────────────────────────────────────────────────────────────
@@ -301,7 +326,13 @@ if __name__ == "__main__":
     parser.add_argument("texts", nargs="*", help="Texts to classify")
     parser.add_argument("--device", default=None)
     parser.add_argument("--batch-size", type=int, default=32)
-    parser.add_argument("--max-length", type=int, default=128)
+    parser.add_argument(
+        "--max-length", type=int, default=None,
+        help=(
+            "Override the tokenizer max_length. By default the predictor uses "
+            "the value saved at training time (preprocessing.json)."
+        ),
+    )
     parser.add_argument("--no-compile", action="store_true")
     parser.add_argument("--no-quantize", action="store_true")
     parser.add_argument(
@@ -315,14 +346,18 @@ if __name__ == "__main__":
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(message)s")
 
+    overrides: dict = {}
+    if args.max_length is not None:
+        overrides["max_length"] = args.max_length
+
     predictor = TextClassificationPredictor(
         args.model_dir,
         device=args.device,
         batch_size=args.batch_size,
-        max_length=args.max_length,
         use_compile=not args.no_compile,
         compile_mode=args.compile_mode,
         quantize_cpu=not args.no_quantize,
+        **overrides,
     )
 
     texts = args.texts or ["I am so happy today!", "This makes me furious.", "I feel nothing."]

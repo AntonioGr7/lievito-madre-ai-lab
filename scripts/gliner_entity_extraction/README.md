@@ -60,6 +60,79 @@ Holdout types default to `PASSPORTNUM DRIVERLICENSENUM AGE` (overridable via `--
 
 Per-label F1 is reported under `f1_<LABEL>`, `precision_<LABEL>`, `recall_<LABEL>` for both views. The output span schema (`label`, `text`, `start`, `end`, `score`) matches `TokenClassificationPredictor` so the same downstream code consumes both.
 
+## Long documents (sliding-window chunking)
+
+GLiNER differs architecturally from text/token classification in two ways that change *where* chunking belongs:
+
+1. **The dataset is tokenizer-agnostic.** The prepare script emits char-offset rows (`{"text": str, "spans": [...]}`); the same processed dataset works with any GLiNER backbone. Adding tokenization at prep would lock the dataset to one model.
+2. **GLiNER operates on word-tokens, not subwords.** Its splitter lives on the model (`model.data_processor.words_splitter`) and the truncation cap is `model.config.max_len`, measured in word-tokens.
+
+So sliding-window chunking happens **at trainer-build time**, not at prep. The trainer (and the predictor) split long word-sequences into overlapping windows of `max_words` with `stride` overlap. Each chunk becomes a self-contained char-offset document with `text` sliced to the chunk's char range and `spans` re-based to chunk-local offsets — so the same row feeds GLiNER's loss (via `tokenized_text`/`ner`) and the eval callback (via `text`/`spans`) without re-truncating.
+
+Configure it in the YAML's `gliner:` block:
+
+```yaml
+gliner:
+  chunking:
+    stride: 64                # default. Set to -1 to disable chunking entirely.
+    max_words: 384            # optional. Omit to use model.config.max_len.
+```
+
+What gets chunked:
+
+| Split | Chunked? | Effect |
+|---|---|---|
+| `train` | Yes | All words contribute to loss; entities past `max_len` are no longer silently dropped. |
+| `validation` (during training) | Yes | `eval_f1` reflects performance on what the model actually sees — chunk-level. |
+| `test` (final metrics) | Yes | `train_gliner.py` re-applies the same chunking before calling `evaluate_split` so `test_closed_*` and `test_zeroshot_*` use the same units as `eval_f1`. |
+
+The prep script and trainer print expansion counts when chunking fires:
+
+```
+[train] 50000 docs → 73412 chunks (+23412 from long documents)
+```
+
+### Chunk-level vs document-level f1
+
+We compute f1 at the **chunk level**, not the document level. An entity sitting in the overlap region appears in two chunks; the model has to predict it correctly in *both* to score full marks. That's slightly stricter than doc-level f1, but:
+
+- It matches what the model sees at inference (one chunk at a time).
+- It's cheap to implement — no aggregation pass.
+- At corpus scale, the aggregate tracks doc-level performance closely.
+
+If you need true document-level f1, post-process the per-chunk predictions yourself: group by source document, merge overlapping same-label spans, score against the original gold set.
+
+### What happens at inference time
+
+`GLiNERPredictor` does its own chunking transparently. Long inputs get split into word-windows, each chunk goes through `batch_predict_entities`, and the returned spans have their char offsets shifted back to the original text. Same-label adjacent/overlapping spans (the boundary-region duplicates) get merged into a single span with the higher score. The caller sees one clean span list per input, in original-text coordinates — exactly what they'd expect from `predict_one(long_text)`.
+
+The predictor reads `max_words` and `stride` from `preprocessing.json` (see below) on load. Pass `max_words=...` / `stride=...` (or `--max-words` / `--stride` on the CLI) to override; `stride=-1` disables chunking.
+
+## Preprocessing metadata (`preprocessing.json`)
+
+Unlike the other two pipelines, GLiNER's prep doesn't pick a tokenizer — so the metadata flow has a slight twist:
+
+- **Prep** writes a tokenizer-agnostic `preprocessing.json` (`source`, `languages`, `train_types`, `holdout_types`).
+- **Train** augments it with the train-time choices (`tokenizer` = `cfg.model_name`, effective `max_words`, `stride`, train/holdout types) and writes the combined file into `outputs/<run>/final/preprocessing.json`.
+- **Serve** reads it on load and uses the recorded `max_words`/`stride` as defaults.
+
+```json
+{
+  "source": "ai4privacy/open-pii-masking-500k-ai4privacy",
+  "languages": ["en"],
+  "tokenizer": "knowledgator/gliner-multitask-large-v0.5",
+  "max_words": 384,
+  "stride": 64,
+  "train_types": ["GIVENNAME", "SURNAME", "EMAIL", ...],
+  "holdout_types": ["PASSPORTNUM", "DRIVERLICENSENUM", "AGE"]
+}
+```
+
+Two guards run before any GPU work (same as the other pipelines):
+
+- **Tokenizer mismatch (hard error)**: if `cfg.model_name` differs from the recorded tokenizer the train script bails.
+- **`max_length`/`max_words` vs model capacity (soft warning)**: fires when the prep-recorded cap exceeds the model's `max_position_embeddings`.
+
 ## Bringing your own data
 
 Copy `examples/gliner_entity_extraction/prepare_openpii.py` as a starting point and adapt it to your corpus. The simplest pattern:
@@ -110,6 +183,16 @@ out.mkdir(parents=True, exist_ok=True)
 processed.save_to_disk(str(out))
 (out / "train_types.json").write_text(json.dumps(train_types))
 (out / "holdout_types.json").write_text(json.dumps(holdout_types))
+
+# 6. Sidecar — tokenizer-agnostic at prep time (the train script adds the
+#    model_name / chunking fields when you actually train).
+from lievito_madre_ai_lab.shared.preprocessing import save_preprocessing_meta
+save_preprocessing_meta(
+    out,
+    source="my-corpus",
+    train_types=train_types,
+    holdout_types=holdout_types,
+)
 ```
 
 Then point a YAML config at `processed_dir: data/processed/my-gliner` and train.
@@ -196,6 +279,11 @@ gliner:
     GIVENNAME: "given name"       # GLiNER reads label names as prompts, so
     DRIVERLICENSENUM: "driver license number"   # natural-language helps zero-shot.
     EMAIL: "email address"        # Predictions are un-aliased back to canonical.
+
+  chunking:                       # Sliding-window chunking for long docs.
+    stride: 64                    # word-token overlap; -1 disables.
+    max_words: 384                # optional; defaults to model.config.max_len.
+                                  # See "Long documents" above for the full story.
 ```
 
 Loss + negative sampling fields go onto `model.config` via `load_gliner` (consumed by GLiNER's collator at batch time). Focal alpha/gamma also propagate to `gliner.training.TrainingArguments.focal_loss_alpha` / `focal_loss_gamma` (consumed by `compute_loss`). Discriminative LR is handled natively by gliner's Trainer via the `others_lr` field, derived from `head_lr_multiplier`.

@@ -3,6 +3,13 @@ from __future__ import annotations
 from datasets import ClassLabel, DatasetDict
 from transformers import AutoTokenizer
 
+# Re-exported for symmetry with token_classification — see shared/preprocessing.py.
+from lievito_madre_ai_lab.shared.preprocessing import (  # noqa: F401
+    PREPROCESSING_META_FILE,
+    load_preprocessing_meta,
+    save_preprocessing_meta,
+)
+
 
 def tokenize_for_trainer(
     raw: DatasetDict,

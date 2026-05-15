@@ -27,7 +27,7 @@ The tables below cover every field accepted by a YAML config. Defaults reflect w
 
 | Field | Default | What it does | Notes |
 |---|---|---|---|
-| `processed_dir` | `data/processed/emotion` | Path to the tokenized Arrow dataset produced by a prepare script. | Required for any real run. |
+| `processed_dir` | `data/processed/emotion` | Path to the tokenized Arrow dataset produced by a prepare script. | Required for any real run. The prepare scripts also write a `preprocessing.json` sidecar here (tokenizer, `max_length`, sliding-window stride, …) — the train script reads it to guard against tokenizer/`max_length` drift, and the predictor reads it on load so inference defaults match training. See each task README for the per-pipeline details. |
 | `model_name` | `answerdotai/ModernBERT-base` | HuggingFace model id or local path. | English: `ModernBERT-base/large`, `deberta-v3-base/large`. Multilingual: `microsoft/mdeberta-v3-base`, `xlm-roberta-base/large`. |
 | `output_dir` | `outputs/run` | Where checkpoints and the final model are saved. | |
 | `experiment_id` | `null` | If set, appends to `output_dir` → `outputs/<run>/<experiment_id>`. | Handy for hyperparameter sweeps. |

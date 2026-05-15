@@ -33,6 +33,7 @@ from lievito_madre_ai_lab.encoder.gliner_entity_extraction.dataset import (
     partition_entity_types,
     validate_row,
 )
+from lievito_madre_ai_lab.shared.preprocessing import save_preprocessing_meta
 
 
 DEFAULT_HOLDOUT = ["PASSPORTNUM", "DRIVERLICENSENUM", "AGE"]
@@ -175,9 +176,25 @@ def main() -> None:
     processed.save_to_disk(str(out_dir))
     (out_dir / "train_types.json").write_text(json.dumps(train_types, indent=2))
     (out_dir / "holdout_types.json").write_text(json.dumps(holdout_types, indent=2))
+
+    # GLiNER prep is intentionally tokenizer-agnostic — no max_length / stride
+    # fields here. Those are decided by the train script once a model is
+    # picked, and recorded in the model dir's preprocessing.json then.
+    langs = [l.strip() for l in args.languages.split(",") if l.strip()] or None
+    save_preprocessing_meta(
+        out_dir,
+        source=args.dataset_id,
+        languages=langs,
+        text_col=args.text_col,
+        mask_col=args.mask_col,
+        train_types=train_types,
+        holdout_types=holdout_types,
+    )
+
     print(f"[4/4] Saved -> {out_dir}")
     print(f"       train_types   -> {out_dir / 'train_types.json'}")
     print(f"       holdout_types -> {out_dir / 'holdout_types.json'}")
+    print(f"       preprocessing.json written (tokenizer-agnostic)")
 
 
 if __name__ == "__main__":

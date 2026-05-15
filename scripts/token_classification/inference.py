@@ -24,7 +24,23 @@ tok = predictor.tokenizer
 model = predictor._model
 id2label = predictor.id2label
 
-enc = tok(TEXT, return_tensors="pt", return_offsets_mapping=True)
+enc = tok(
+    TEXT,
+    return_tensors="pt",
+    return_offsets_mapping=True,
+    truncation=True,
+    max_length=predictor.max_length,
+)
+# The diagnostic table below only inspects the first max_length tokens. The
+# predict_one call further down goes through the full sliding-window pipeline
+# in serve.py and is the source of truth for the final spans.
+full_len = len(tok(TEXT, add_special_tokens=False)["input_ids"])
+if full_len > predictor.max_length:
+    print(
+        f"[note] text is {full_len} tokens; the per-token table only shows the "
+        f"first {predictor.max_length}. The span list below uses the full "
+        f"sliding-window inference (stride={predictor.stride})."
+    )
 offsets = enc.pop("offset_mapping")[0].tolist()
 word_ids = enc.word_ids(batch_index=0)
 

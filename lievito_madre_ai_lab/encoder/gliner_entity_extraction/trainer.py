@@ -27,12 +27,21 @@ from lievito_madre_ai_lab.shared.config import TrainConfig
 class GLiNERTrainCfg:
     """GLiNER knobs the *trainer* needs (loss-fn name + sampling go onto
     model.config via load_gliner; here we carry the trainer-side parameters
-    that map onto gliner.training.TrainingArguments fields)."""
+    that map onto gliner.training.TrainingArguments fields).
+
+    chunk_max_words / chunk_stride control word-token-level sliding-window
+    chunking of long training documents — see ``chunk_to_gliner_native``.
+    When ``chunk_max_words is None`` we fall back to ``model.config.max_len``
+    so docs that would have been silently truncated are split into overlapping
+    chunks instead. Set ``chunk_stride=-1`` to disable chunking entirely.
+    """
     max_span_width: int | None = None
     head_lr_multiplier: float = 5.0
     focal_loss_alpha: float = -1.0   # -1 = focal disabled (falls back to BCE)
     focal_loss_gamma: float = 0.0
     loss_reduction: str = "sum"
+    chunk_max_words: int | None = None
+    chunk_stride: int = 64
 
 
 def _resolve_precision(precision: str) -> tuple[bool, bool, bool]:
@@ -158,22 +167,45 @@ def build_trainer(
         build_eval_callback,
     )
     from lievito_madre_ai_lab.encoder.gliner_entity_extraction.dataset import (
-        to_gliner_native,
+        to_native_dataset,
     )
 
     eval_split = "validation" if "validation" in datasets else "test"
 
-    # Char-offset rows → GLiNER native (tokenized_text + ner). The original
-    # text/spans columns are preserved (remove_unused_columns=False) so the
-    # eval callback can still consume them.
+    # Char-offset rows → GLiNER native (tokenized_text + ner). When chunking
+    # is on (stride >= 0), all splits get sliced into overlapping windows so
+    # both training AND eval-time f1 are computed at the chunk level.
     splitter = model.data_processor.words_splitter
-    native_datasets = type(datasets)({
-        name: split.map(
-            lambda r: to_gliner_native(r, splitter),
-            desc=f"Converting {name} -> GLiNER native",
+    chunking_enabled = (
+        gliner_cfg is not None and gliner_cfg.chunk_stride >= 0
+    )
+    if chunking_enabled:
+        max_words = (
+            gliner_cfg.chunk_max_words
+            if gliner_cfg.chunk_max_words is not None
+            else int(getattr(model.config, "max_len", 384))
         )
-        for name, split in datasets.items()
-    })
+        stride = gliner_cfg.chunk_stride
+    else:
+        max_words = None
+        stride = -1
+
+    native_datasets: dict = {}
+    for name, split in datasets.items():
+        pre = len(split)
+        native_datasets[name] = to_native_dataset(
+            split, splitter,
+            max_words=max_words, stride=stride,
+            desc=f"Converting {name} -> GLiNER native"
+                 + (f" (chunk≤{max_words}, stride={stride})" if chunking_enabled else ""),
+        )
+        post = len(native_datasets[name])
+        if chunking_enabled and post > pre:
+            print(
+                f"      [{name}] {pre} docs → {post} chunks "
+                f"(+{post - pre} from long documents)"
+            )
+    native_datasets = type(datasets)(native_datasets)
 
     processor = model.data_processor
     if isinstance(processor, (UniEncoderSpanProcessor, BiEncoderSpanProcessor)):
@@ -190,9 +222,12 @@ def build_trainer(
     # args.others_lr / args.others_weight_decay fields we set in
     # build_training_args; no custom optimizer needed here.
 
+    # The eval callback consumes text/spans (char-offset). When chunking is
+    # enabled the chunked native rows carry their own rebased text/spans, so
+    # we point the callback at the native dataset rather than the original.
     callbacks = [
         build_eval_callback(
-            datasets[eval_split],
+            native_datasets[eval_split],
             train_types=train_types,
             threshold=eval_threshold,
             batch_size=training_args.per_device_eval_batch_size,

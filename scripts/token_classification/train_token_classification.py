@@ -31,10 +31,18 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+from lievito_madre_ai_lab.encoder.token_classification.dataset import (
+    load_preprocessing_meta,
+    save_preprocessing_meta,
+)
 from lievito_madre_ai_lab.encoder.token_classification.evaluate import build_compute_metrics
 from lievito_madre_ai_lab.encoder.token_classification.model import load_model_and_tokenizer
 from lievito_madre_ai_lab.encoder.token_classification.trainer import build_trainer, build_training_args
 from lievito_madre_ai_lab.shared.config import TrainConfig, compute_total_training_steps, load_config
+from lievito_madre_ai_lab.shared.preprocessing import (
+    assert_tokenizer_matches,
+    warn_if_max_length_exceeds_model_capacity,
+)
 
 
 def setup_wandb(cfg: TrainConfig) -> None:
@@ -94,6 +102,12 @@ def main() -> None:
     print(f"[1/4] Loading processed dataset from '{cfg.processed_dir}' …")
     datasets = load_from_disk(cfg.processed_dir)
 
+    # Hard-fail early if the tokenizer used at prep time doesn't match the
+    # model picked here — a silent vocabulary mismatch wastes the whole run.
+    prep_meta = load_preprocessing_meta(cfg.processed_dir)
+    if prep_meta is not None:
+        assert_tokenizer_matches(prep_meta, model_name=cfg.model_name)
+
     limits = {"train": args.max_train_samples,
               "validation": args.max_eval_samples,
               "test": args.max_test_samples}
@@ -117,6 +131,8 @@ def main() -> None:
         label_names,
         attn_implementation=cfg.attn_implementation,
     )
+    if prep_meta is not None:
+        warn_if_max_length_exceeds_model_capacity(prep_meta, model_config=model.config)
 
     # ------------------------------------------------------------------
     # 3. Build trainer
@@ -155,6 +171,19 @@ def main() -> None:
 
     trainer.save_model(str(final_dir))
     tokenizer.save_pretrained(str(final_dir))
+
+    # Forward preprocessing settings (max_length, stride, …) recorded by the
+    # prepare script into the model dir, so serve.py can pick the same values
+    # without the caller having to remember them.
+    if prep_meta is not None:
+        save_preprocessing_meta(final_dir, **prep_meta)
+        print(f"      preprocessing.json copied to {final_dir} "
+              f"(max_length={prep_meta.get('max_length')}, "
+              f"stride={prep_meta.get('stride')})")
+    else:
+        print(f"      [warn] no preprocessing.json in '{cfg.processed_dir}'; "
+              f"serve.py will fall back to its hardcoded defaults.")
+
     print(f"Model saved → {final_dir}")
 
 

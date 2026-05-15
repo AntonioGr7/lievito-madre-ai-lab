@@ -39,7 +39,9 @@ from pathlib import Path
 from datasets import DatasetDict
 
 from lievito_madre_ai_lab.encoder.token_classification.dataset import (
+    ENTITY_TYPES,
     preview_alignment,
+    save_preprocessing_meta,
     tokenize_for_trainer,
 )
 from lievito_madre_ai_lab.shared.sources import DriveSource, HFSource, LocalSource
@@ -83,6 +85,14 @@ def parse_args() -> argparse.Namespace:
     # tokenizer options
     p.add_argument("--model", default=DEFAULT_MODEL, help="HF model name for the tokenizer")
     p.add_argument("--max-length", type=int, default=DEFAULT_MAX_LEN, help="Tokenizer max_length")
+    p.add_argument(
+        "--stride", type=int, default=128,
+        help=(
+            "Overlapping tokens between consecutive chunks of long documents. "
+            "Default 128. Use 0 for chunking without overlap, or -1 to disable "
+            "chunking and fall back to plain truncation (legacy behaviour)."
+        ),
+    )
     p.add_argument("--text-col", default="source_text", help="Name of the text column")
     p.add_argument("--mask-col", default="privacy_mask", help="Name of the privacy mask column")
     p.add_argument(
@@ -152,7 +162,13 @@ def main() -> None:
     # ------------------------------------------------------------------
     # 3. Tokenize + align BIO labels
     # ------------------------------------------------------------------
-    print(f"[2/3] Tokenising with '{args.model}' (max_length={args.max_length}) …")
+    stride = None if args.stride < 0 else args.stride
+    stride_desc = "off (truncate)" if stride is None else f"stride={stride}"
+    print(
+        f"[2/3] Tokenising with '{args.model}' "
+        f"(max_length={args.max_length}, sliding window: {stride_desc}) …"
+    )
+    pre_counts = {split: len(ds) for split, ds in raw.items()}
     processed = tokenize_for_trainer(
         raw,
         args.model,
@@ -160,8 +176,17 @@ def main() -> None:
         mask_col=args.mask_col,
         max_length=args.max_length,
         label_all_tokens=args.label_all_tokens,
+        stride=stride,
     )
     print(processed)
+    for split, pre in pre_counts.items():
+        post = len(processed[split])
+        gain = post - pre
+        if gain:
+            print(
+                f"      [{split}] {pre} docs → {post} chunks "
+                f"(+{gain} from long documents)"
+            )
 
     # Sanity-check the BIO alignment by eyeballing a few tokenized examples.
     # Cheap, and the kind of thing that catches tokenizer-specific bugs
@@ -173,7 +198,20 @@ def main() -> None:
     # ------------------------------------------------------------------
     out_dir.mkdir(parents=True, exist_ok=True)
     processed.save_to_disk(str(out_dir))
+    save_preprocessing_meta(
+        out_dir,
+        source=args.dataset_id,
+        tokenizer=args.model,
+        text_col=args.text_col,
+        mask_col=args.mask_col,
+        max_length=args.max_length,
+        stride=stride,
+        label_all_tokens=args.label_all_tokens,
+        entity_types=ENTITY_TYPES,
+    )
     print(f"[3/3] Processed dataset saved → {out_dir}")
+    print(f"      preprocessing.json written (max_length={args.max_length}, "
+          f"stride={stride}) so serve.py can rediscover the settings.")
 
 
 if __name__ == "__main__":

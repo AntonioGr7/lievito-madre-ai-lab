@@ -116,6 +116,140 @@ def collect_entity_types(raw, span_col: str = "spans") -> list[str]:
     return sorted(seen)
 
 
+def _split_words_with_offsets(text: str, words_splitter) -> tuple[list[str], list[tuple[int, int]]]:
+    """Run *words_splitter* over *text* and normalise its output into parallel
+    ``(tokens, char_offsets)`` lists. Tolerates the 1/2/3-tuple shapes the
+    different gliner releases have produced over time.
+    """
+    tokens: list[str] = []
+    offsets: list[tuple[int, int]] = []
+    for w in words_splitter(text):
+        if isinstance(w, str):
+            tokens.append(w)
+            offsets.append((-1, -1))
+        elif len(w) == 3:
+            tokens.append(w[0])
+            offsets.append((int(w[1]), int(w[2])))
+        elif len(w) == 2:
+            tokens.append(str(w[0]))
+            offsets.append((int(w[1]), -1))
+        else:
+            tokens.append(str(w[0]))
+            offsets.append((-1, -1))
+    return tokens, offsets
+
+
+def _spans_for_window(
+    spans: list[dict],
+    offsets: list[tuple[int, int]],
+    start_tok: int,
+    end_tok: int,
+) -> list[list]:
+    """Compute the ``ner`` list for the word-token window ``[start_tok, end_tok)``.
+
+    Spans entirely outside the window are dropped. Spans that overlap the
+    window are kept with token indices remapped to the window-local frame.
+    Spans that *straddle* the window boundary are clipped to the visible
+    tokens — the same span may then appear (clipped) in the next overlapping
+    chunk, which is the whole point of stride > 0.
+    """
+    out: list[list] = []
+    window_offsets = offsets[start_tok:end_tok]
+    for span in spans:
+        s_char, e_char, label = int(span["start"]), int(span["end"]), span["label"]
+        first_local: int | None = None
+        last_local: int | None = None
+        for i, (ts, te) in enumerate(window_offsets):
+            if ts < 0 or te < 0:
+                continue
+            if te <= s_char or ts >= e_char:
+                continue
+            if first_local is None:
+                first_local = i
+            last_local = i
+        if first_local is not None and last_local is not None:
+            out.append([first_local, last_local, label])
+    return out
+
+
+def chunk_to_gliner_native(
+    row: dict,
+    words_splitter,
+    *,
+    max_words: int,
+    stride: int,
+) -> list[dict]:
+    """Char-offset row → list of self-contained chunk rows.
+
+    Long documents would otherwise be silently truncated to ``model.config.max_len``
+    inside GLiNER's data processor, losing supervision on entities past the
+    cap. We window the *word* sequence (matching the model's splitter, not
+    subword) with overlap, so every entity stays fully visible in at least
+    one chunk.
+
+    Each emitted row is a **standalone document**: ``text`` is sliced to the
+    chunk's char range and ``spans`` are clipped to that range with offsets
+    rebased to chunk-local coordinates. This lets the same row be consumed
+    by both the GLiNER trainer (via ``tokenized_text``/``ner``) and the eval
+    callback (via ``text``/``spans``) without re-truncating long inputs.
+    """
+    if max_words <= 0:
+        raise ValueError(f"max_words must be > 0, got {max_words}")
+    if stride < 0 or stride >= max_words:
+        raise ValueError(
+            f"stride must satisfy 0 <= stride < max_words; "
+            f"got stride={stride}, max_words={max_words}"
+        )
+
+    text = row["text"]
+    tokens, offsets = _split_words_with_offsets(text, words_splitter)
+    n = len(tokens)
+    spans = row["spans"]
+
+    if n <= max_words:
+        ner = _spans_for_window(spans, offsets, 0, n)
+        return [{**row, "tokenized_text": tokens, "ner": ner}]
+
+    step = max_words - stride
+    out: list[dict] = []
+    start = 0
+    while True:
+        end = min(start + max_words, n)
+        ner = _spans_for_window(spans, offsets, start, end)
+
+        # Self-contained chunk: slice the text to the char range covered by
+        # this window's words (keeping whitespace/punctuation between them)
+        # and rebase span offsets to be chunk-local.
+        valid = [(s, e) for (s, e) in offsets[start:end] if s >= 0 and e >= 0]
+        if valid:
+            chunk_char_start = valid[0][0]
+            chunk_char_end = valid[-1][1]
+        else:
+            chunk_char_start, chunk_char_end = 0, 0
+        chunk_text = text[chunk_char_start:chunk_char_end]
+        chunk_spans: list[dict] = []
+        for span in spans:
+            s_char, e_char = int(span["start"]), int(span["end"])
+            if e_char <= chunk_char_start or s_char >= chunk_char_end:
+                continue
+            # Clip to the chunk's range and rebase to chunk-local offsets.
+            cs = max(s_char, chunk_char_start) - chunk_char_start
+            ce = min(e_char, chunk_char_end) - chunk_char_start
+            chunk_spans.append({"start": cs, "end": ce, "label": span["label"]})
+
+        out.append({
+            **row,
+            "text": chunk_text,
+            "spans": chunk_spans,
+            "tokenized_text": tokens[start:end],
+            "ner": ner,
+        })
+        if end >= n:
+            break
+        start += step
+    return out
+
+
 def to_gliner_native(row: dict, words_splitter) -> dict:
     """Convert a char-offset row → GLiNER's native training format.
 
@@ -135,47 +269,72 @@ def to_gliner_native(row: dict, words_splitter) -> dict:
     `words_splitter` is GLiNER's own splitter (`model.data_processor.words_splitter`),
     so there is no tokenization drift between training and inference.
     """
-    text = row["text"]
-
-    # WordsSplitter returns `(token_text, char_start, char_end)` triples in
-    # gliner 0.2.x. Tolerate the simpler `(token_text, char_start, char_end)`
-    # shape and the bare `(start, end)` shape just in case.
-    words = list(words_splitter(text))
-    tokens: list[str] = []
-    offsets: list[tuple[int, int]] = []
-    for w in words:
-        if isinstance(w, str):
-            tokens.append(w)
-            offsets.append((-1, -1))   # offsets unknown; spans below will skip
-        elif len(w) == 3:
-            tokens.append(w[0])
-            offsets.append((int(w[1]), int(w[2])))
-        elif len(w) == 2:
-            tokens.append(str(w[0]))
-            offsets.append((int(w[1]), -1))
-        else:
-            tokens.append(str(w[0]))
-            offsets.append((-1, -1))
-
-    ner: list[list] = []
-    for span in row["spans"]:
-        s_char, e_char = int(span["start"]), int(span["end"])
-        start_tok: int | None = None
-        end_tok: int | None = None
-        for i, (ts, te) in enumerate(offsets):
-            if ts < 0 or te < 0:
-                # offset unknown; can't map this token
-                continue
-            # Overlap rule: token range and span range share at least one char.
-            if te <= s_char or ts >= e_char:
-                continue
-            if start_tok is None:
-                start_tok = i
-            end_tok = i
-        if start_tok is not None and end_tok is not None:
-            ner.append([start_tok, end_tok, span["label"]])
-
+    tokens, offsets = _split_words_with_offsets(row["text"], words_splitter)
+    ner = _spans_for_window(row["spans"], offsets, 0, len(tokens))
     return {"tokenized_text": tokens, "ner": ner}
+
+
+def to_native_dataset(
+    split,
+    words_splitter,
+    *,
+    max_words: int | None = None,
+    stride: int = -1,
+    desc: str | None = None,
+):
+    """Convert a char-offset ``Dataset`` to the GLiNER native format.
+
+    With ``stride < 0`` chunking is disabled — equivalent to calling
+    ``to_gliner_native`` per row. With ``stride >= 0`` (and a positive
+    ``max_words``), long documents are split into overlapping chunks via
+    ``chunk_to_gliner_native``: each emitted row is a self-contained
+    char-offset document (text/spans rebased to chunk-local offsets) that
+    also carries the matching ``tokenized_text``/``ner``. The same row can
+    therefore be consumed by the GLiNER trainer (native form) and by the
+    eval callback (char-offset form) without re-truncating.
+
+    Shared by ``build_trainer`` (which chunks all splits for training and
+    chunk-level eval) and ``train_gliner.py`` (which chunks the test split
+    the same way before computing final metrics).
+    """
+    chunking = stride >= 0
+    if chunking:
+        if max_words is None or max_words <= 0:
+            raise ValueError(
+                f"max_words must be positive when stride >= 0; got {max_words}"
+            )
+        if stride >= max_words:
+            raise ValueError(
+                f"stride={stride} must be < max_words={max_words}"
+            )
+
+    def _batch(batch: dict) -> dict:
+        out: dict[str, list] = {k: [] for k in batch}
+        out["tokenized_text"] = []
+        out["ner"] = []
+        for i in range(len(batch["text"])):
+            row = {k: batch[k][i] for k in batch}
+            if chunking:
+                chunks = chunk_to_gliner_native(
+                    row, words_splitter,
+                    max_words=max_words, stride=stride,
+                )
+            else:
+                native = to_gliner_native(row, words_splitter)
+                chunks = [{**row, **native}]
+            for chunk in chunks:
+                for k in batch:
+                    out[k].append(chunk[k])
+                out["tokenized_text"].append(chunk["tokenized_text"])
+                out["ner"].append(chunk["ner"])
+        return out
+
+    return split.map(
+        _batch,
+        batched=True,
+        remove_columns=split.column_names,
+        desc=desc or "Converting -> GLiNER native",
+    )
 
 
 def load_processed(processed_dir: str | Path):
