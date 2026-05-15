@@ -24,18 +24,20 @@ def _resolve_precision(precision: str) -> tuple[bool, bool, bool]:
     """
     cuda = torch.cuda.is_available()
     cap_major = torch.cuda.get_device_capability(0)[0] if cuda else 0
+    # TF32 needs Ampere+ (cap>=8). Turing (T4, cap=7.5) rejects tf32=True.
+    can_do_tf32 = cuda and cap_major >= 8
 
     if precision == "auto":
-        if cuda and cap_major >= 8:
+        if can_do_tf32:
             return False, True, True
         if cuda:
-            return True, False, True
+            return True, False, False
         return False, False, False
 
     if precision == "bf16":
-        return False, True, cuda
+        return False, True, can_do_tf32
     if precision == "fp16":
-        return True, False, cuda
+        return True, False, can_do_tf32
     if precision == "fp32":
         return False, False, False
     raise ValueError(f"unknown precision: {precision!r}")
