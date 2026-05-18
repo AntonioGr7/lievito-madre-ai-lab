@@ -142,8 +142,25 @@ def build_eval_callback(
                     batch_size=batch_size,
                     label_aliases=aliases,
                 )
-            for k, v in results.items():
-                metrics[f"{prefix}_{k}"] = v
+            prefixed = {f"{prefix}_{k}": v for k, v in results.items()}
+            metrics.update(prefixed)
+
+            # HF Trainer logs `metrics` to stdout/W&B *before* this callback
+            # fires, so the values we just added would otherwise be invisible
+            # mid-training (best-model selection still sees them via the
+            # mutated dict). Push them out-of-band here so the operator sees
+            # the f1 slope: W&B merges by step, so this lands on the same
+            # chart point as eval_loss.
+            scalar_extras = {k: v for k, v in prefixed.items() if isinstance(v, (int, float))}
+            try:
+                import wandb
+                if wandb.run is not None:
+                    wandb.log(scalar_extras, step=state.global_step)
+            except ImportError:
+                pass
+            headline = {k: scalar_extras[k] for k in (f"{prefix}_precision", f"{prefix}_recall", f"{prefix}_f1") if k in scalar_extras}
+            if headline:
+                print(f"[eval @ step {state.global_step}] " + " ".join(f"{k}={v:.4f}" for k, v in headline.items()))
 
     return _EvalCallback()
 
