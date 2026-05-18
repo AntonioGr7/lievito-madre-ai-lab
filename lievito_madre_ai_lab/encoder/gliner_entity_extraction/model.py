@@ -35,19 +35,52 @@ class PeftConfig:
 _DEBERTA_V3_LORA_TARGETS = ["query_proj", "key_proj", "value_proj", "dense"]
 
 
+def _find_hf_encoder(model):
+    """Locate the HuggingFace ``PreTrainedModel`` buried inside GLiNER.
+
+    GLiNER wraps the encoder several levels deep::
+
+        model (outer GLiNER wrapper)
+          .model                -> UniEncoderSpanModel / sibling
+            .token_rep_layer    -> Encoder / BiEncoder
+              .bert_layer       -> Transformer
+                .model          -> HF PreTrainedModel  (GC lives here)
+
+    PEFT, when enabled in :func:`load_gliner`, wraps ``model.model`` with a
+    ``PeftModel`` whose attribute access forwards to the wrapped module, so
+    the same path still resolves.
+    """
+    cur = getattr(model, "model", None)
+    for attr in ("token_rep_layer", "bert_layer", "model"):
+        if cur is None:
+            break
+        cur = getattr(cur, attr, None)
+    if cur is not None and hasattr(cur, "gradient_checkpointing_enable"):
+        return cur
+    # Fallback: if a future GLiNER release moves things, accept any nn.Module
+    # along the chain that exposes the method.
+    for candidate in (getattr(model, "model", None),):
+        if candidate is not None and hasattr(candidate, "gradient_checkpointing_enable"):
+            return candidate
+    raise AttributeError(
+        "Could not locate a PreTrainedModel under the GLiNER wrapper for "
+        "gradient checkpointing. Looked at "
+        "model.model.token_rep_layer.bert_layer.model and model.model."
+    )
+
+
 def _attach_gradient_checkpointing(model) -> None:
     """Make the GLiNER wrapper respond to HF Trainer's GC hook.
 
-    HF Trainer calls ``self.model.gradient_checkpointing_enable(...)`` directly
-    on the outer ``UniEncoderSpanGLiNER`` (or sibling) wrapper — but that
-    wrapper is a plain ``nn.Module`` and only the inner encoder at
-    ``model.model`` exposes the method. We attach thin delegates that forward
-    to the encoder, disable ``use_cache`` (incompatible with GC), and when the
-    encoder is PEFT-wrapped enable input require_grads so autograd reaches the
-    LoRA adapters through the frozen embedding table.
+    HF Trainer calls ``self.model.gradient_checkpointing_enable(...)`` on the
+    outer GLiNER wrapper, which is a plain ``nn.Module``. We attach thin
+    delegates that forward to the underlying HF encoder, disable ``use_cache``
+    (incompatible with GC), and call ``enable_input_require_grads`` so that
+    when LoRA is in play autograd still reaches the adapters through the
+    frozen embedding table.
     """
     def _enable(self, gradient_checkpointing_kwargs=None):
-        inner = self.model
+        inner = _find_hf_encoder(self)
         if gradient_checkpointing_kwargs is None:
             inner.gradient_checkpointing_enable()
         else:
@@ -58,13 +91,9 @@ def _attach_gradient_checkpointing(model) -> None:
             inner.config.use_cache = False
         if hasattr(inner, "enable_input_require_grads"):
             inner.enable_input_require_grads()
-        elif hasattr(inner, "get_base_model"):
-            base = inner.get_base_model()
-            if hasattr(base, "enable_input_require_grads"):
-                base.enable_input_require_grads()
 
     def _disable(self):
-        inner = self.model
+        inner = _find_hf_encoder(self)
         if hasattr(inner, "gradient_checkpointing_disable"):
             inner.gradient_checkpointing_disable()
         if hasattr(inner, "config"):
