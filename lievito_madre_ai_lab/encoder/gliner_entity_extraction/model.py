@@ -15,6 +15,7 @@ Single entry point: `load_gliner`. Responsibilities:
 """
 from __future__ import annotations
 
+import types
 from dataclasses import dataclass
 from typing import Any
 
@@ -32,6 +33,45 @@ class PeftConfig:
 # DeBERTa-v3 (used by gliner_multi-v2.5 / gliner-multitask) keys on these
 # submodule names inside the disentangled-attention block.
 _DEBERTA_V3_LORA_TARGETS = ["query_proj", "key_proj", "value_proj", "dense"]
+
+
+def _attach_gradient_checkpointing(model) -> None:
+    """Make the GLiNER wrapper respond to HF Trainer's GC hook.
+
+    HF Trainer calls ``self.model.gradient_checkpointing_enable(...)`` directly
+    on the outer ``UniEncoderSpanGLiNER`` (or sibling) wrapper — but that
+    wrapper is a plain ``nn.Module`` and only the inner encoder at
+    ``model.model`` exposes the method. We attach thin delegates that forward
+    to the encoder, disable ``use_cache`` (incompatible with GC), and when the
+    encoder is PEFT-wrapped enable input require_grads so autograd reaches the
+    LoRA adapters through the frozen embedding table.
+    """
+    def _enable(self, gradient_checkpointing_kwargs=None):
+        inner = self.model
+        if gradient_checkpointing_kwargs is None:
+            inner.gradient_checkpointing_enable()
+        else:
+            inner.gradient_checkpointing_enable(
+                gradient_checkpointing_kwargs=gradient_checkpointing_kwargs
+            )
+        if hasattr(inner, "config"):
+            inner.config.use_cache = False
+        if hasattr(inner, "enable_input_require_grads"):
+            inner.enable_input_require_grads()
+        elif hasattr(inner, "get_base_model"):
+            base = inner.get_base_model()
+            if hasattr(base, "enable_input_require_grads"):
+                base.enable_input_require_grads()
+
+    def _disable(self):
+        inner = self.model
+        if hasattr(inner, "gradient_checkpointing_disable"):
+            inner.gradient_checkpointing_disable()
+        if hasattr(inner, "config"):
+            inner.config.use_cache = True
+
+    model.gradient_checkpointing_enable = types.MethodType(_enable, model)
+    model.gradient_checkpointing_disable = types.MethodType(_disable, model)
 
 
 def _resolve_lora_targets(model, requested) -> list[str]:
@@ -116,4 +156,5 @@ def load_gliner(
         model.config.peft_enabled = True
         model.config.peft_target_modules = targets
 
+    _attach_gradient_checkpointing(model)
     return model
