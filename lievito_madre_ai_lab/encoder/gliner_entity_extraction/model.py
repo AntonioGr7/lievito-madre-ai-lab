@@ -69,6 +69,52 @@ def _find_hf_encoder(model):
     )
 
 
+def _retarget_span_rep_max_width(model, new_max_width: int) -> None:
+    """Propagate ``max_width`` into every submodule that cached it at init.
+
+    The span representation layer stamps ``self.max_width`` in its
+    ``__init__`` for two distinct uses depending on the variant:
+
+    - *reshape-only* (``SpanMarker``, ``SpanMarkerV1``): used solely as the
+      reshape dim in ``out.view(B, L, max_width, D)``. Safe to retarget — no
+      pretrained parameters are tied to the old value.
+    - *parameter-bound* (``SpanMarkerV0``, ``SpanConv*``): also indexes
+      ``nn.Parameter`` tensors (``query_seg``, ``conv_weigth``). Changing the
+      width here would invalidate the pretrained weights, so we raise
+      instead of silently re-initialising.
+
+    Without this, setting ``model.config.max_width`` propagates to the data
+    processor (which produces ``L * max_width`` candidate spans) but not to
+    the layer's cached attribute, and the reshape blows up at the first
+    forward call.
+    """
+    affected: list[str] = []
+    for module in model.modules():
+        old = getattr(module, "max_width", None)
+        if not isinstance(old, int) or old == new_max_width:
+            continue
+        bound_params = [
+            (name, tuple(p.shape))
+            for name, p in module.named_parameters(recurse=False)
+            if any(d == old for d in p.shape)
+        ]
+        if bound_params:
+            raise ValueError(
+                f"Cannot change max_span_width from {old} to {new_max_width}: "
+                f"{type(module).__name__} has pretrained parameters whose "
+                f"shape is tied to the old width: {bound_params}. Either keep "
+                f"max_span_width={old}, or pick a model whose span_rep layer "
+                f"is reshape-only (SpanMarker / SpanMarkerV1)."
+            )
+        module.max_width = new_max_width
+        affected.append(type(module).__name__)
+    if affected:
+        print(
+            f"      [load_gliner] propagated max_width={new_max_width} to "
+            f"{len(affected)} submodule(s): {affected}"
+        )
+
+
 def _attach_gradient_checkpointing(model) -> None:
     """Make the GLiNER wrapper respond to HF Trainer's GC hook.
 
@@ -148,7 +194,9 @@ def load_gliner(
     model.config.label_aliases = dict(label_aliases or {})
 
     if max_span_width is not None:
-        model.config.max_width = int(max_span_width)
+        new_w = int(max_span_width)
+        model.config.max_width = new_w
+        _retarget_span_rep_max_width(model, new_w)
 
     # Loss --------------------------------------------------------------
     if loss_cfg:
