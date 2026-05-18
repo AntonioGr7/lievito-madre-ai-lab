@@ -1,0 +1,89 @@
+processed_dir: data/processed/bi-encoder      # set after running a prepare script
+model_name: nomic-ai/modernbert-embed-base
+output_dir: outputs/bi_encoder_modernbert
+experiment_id: exp_01                          # outputs/bi_encoder_modernbert/exp_01
+attn_implementation: sdpa                      # "sdpa" | "flash_attention_2" | "eager"
+
+num_train_epochs: 1                            # MNRL converges fast; 1-3 epochs typical
+max_steps: -1
+per_device_train_batch_size: 32                # bigger = more in-batch negatives = better
+per_device_eval_batch_size: 64
+gradient_accumulation_steps: 1                 # MNRL benefits from REAL big batches —
+                                               # accumulation does NOT increase negatives
+learning_rate: 2e-5
+weight_decay: 0.01
+warmup_ratio: 0.1
+max_grad_norm: 1.0
+lr_scheduler_type: linear
+optim: adamw_torch_fused
+seed: 42
+
+eval_strategy: epoch
+save_strategy: epoch
+eval_steps: null
+save_steps: null
+load_best_model_at_end: true
+# Auto-filled by the train script when set to the encoder default 'f1':
+# triplet shape                    -> eval_<split>_cosine_accuracy
+# pair / multi_negative / distill  -> eval_<split>_cosine_mrr@10
+metric_for_best_model: f1
+greater_is_better: true
+save_total_limit: 2
+early_stopping_patience: 2
+
+precision: auto                                # bf16 on Ampere+, fp16 on Turing, fp32 on CPU
+gradient_checkpointing: false
+torch_compile: false
+train_sampling_strategy: random                # ignored — see bi_encoder.batch_sampler
+dataloader_num_workers: 2
+pad_to_multiple_of: 8
+
+logging_steps: 50
+report_to: wandb
+
+wandb_project: lievito-madre-ai-lab
+wandb_run_name: "run-bi-encoder-001"
+wandb_tags: []
+wandb_notes: null
+
+# ─── Bi-encoder specific ──────────────────────────────────────────────────────
+bi_encoder:
+  loss:
+    name: MultipleNegativesRankingLoss         # for distillation: DistillKLDivLoss
+                                               # for memory-bound: CachedMultipleNegativesRankingLoss
+    kwargs:
+      scale: 20.0                              # logit temperature for MNRL
+      # mini_batch_size: 32                    # only for CachedMNRL — enables huge effective batches
+
+  batch_sampler: NO_DUPLICATES                 # safest under in-batch-negatives losses
+
+  # Matryoshka: one model, multiple useful embedding dims (and optionally
+  # multiple useful encoder depths). Trade speed/storage vs. quality at
+  # inference with a single artifact.
+  matryoshka:
+    enabled: false                             # flip to true to enable
+    mode: "1d"                                 # "1d" = dim only; "2d" = depth × dim
+    dims: [768, 512, 256, 128, 64]             # ModernBERT-embed-base native dim is 768
+    weights: null                              # null = equal weighting; else list aligned to dims
+    # ── 2D-only knobs (ignored when mode == "1d") ─────────────────────
+    n_layers_per_step: 1                       # 1 = train every layer; higher = coarser
+    last_layer_weight: 1.0
+    prior_layers_weight: 1.0
+    kl_div_weight: 1.0                         # KL term aligning earlier layers with last
+    kl_temperature: 0.3
+
+  # Instruction prefixes — critical for E5 / Nomic / BGE-M3 family.
+  # Without them the fine-tuned model drifts off the protocol it was pre-trained with.
+  # `nomic-ai/modernbert-embed-base` uses 'search_query: ' and 'search_document: '.
+  prompts:
+    # Per-column prefix applied during training. Maps column name → prefix.
+    columns:
+      anchor:   "search_query: "
+      positive: "search_document: "
+      negative: "search_document: "            # ignored if your dataset has no `negative` col
+    # Optional — saved on the model so the predictor can do
+    #   predictor.encode(texts, prompt_name="query")
+    # If omitted, auto-derived from `columns` (query=anchor, document=positive).
+    # inference:
+    #   query:    "search_query: "
+    #   document: "search_document: "

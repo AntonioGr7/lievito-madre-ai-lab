@@ -14,6 +14,7 @@ Encoder models (BERT, RoBERTa, DeBERTa, XLM-R, ModernBERT, …) fine-tuned with 
 | [Text Classification](scripts/text_classification/README.md) | `scripts/text_classification/train_text_classification.py` | `dair-ai/emotion` |
 | [Token Classification](scripts/token_classification/README.md) | `scripts/token_classification/train_token_classification.py` | `ai4privacy/open-pii-masking-500k-ai4privacy` |
 | [GLiNER Entity Extraction](scripts/gliner_entity_extraction/README.md) | `scripts/gliner_entity_extraction/train_gliner.py` | `ai4privacy/open-pii-masking-500k-ai4privacy` |
+| [Bi-Encoder (sentence-transformers)](scripts/embedding_bi_encoder/README.md) | `scripts/embedding_bi_encoder/train_bi_encoder.py` | _bring your own (anchor, positive[, negative])_ |
 
 Each task README covers: quickstart, resuming after a failure, inference, switching model/dataset, and bringing your own data.
 

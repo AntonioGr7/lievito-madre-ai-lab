@@ -30,6 +30,23 @@ extras_require = {
     ],
 
     # ------------------------------------------------------------------ #
+    # Embedding models — bi-encoders & cross-encoders                    #
+    # Tasks: semantic search, retrieval fine-tuning, re-ranking          #
+    # Driven by sentence-transformers (v3+ uses HF Trainer under the    #
+    # hood, so this group shares transformers / wandb with `encoder`).  #
+    # ------------------------------------------------------------------ #
+    "embedding": _base + [
+        "transformers>=5.8.0",
+        "sentence-transformers>=4.0.0",
+        "bm25s>=0.2.0",          # fast BM25 for hard-negative mining ensembles
+        "evaluate>=0.4.6",
+        "scikit-learn>=1.4.0",
+        "pyyaml>=6.0.0",
+        "wandb>=0.26.1",
+        "python-dotenv>=1.0.0",
+    ],
+
+    # ------------------------------------------------------------------ #
     # Decoder models — GPT-2, LLaMA, Mistral, Falcon, …                  #
     # Tasks: causal LM, instruction tuning, chat                         #
     # ------------------------------------------------------------------ #
