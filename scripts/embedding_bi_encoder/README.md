@@ -37,6 +37,16 @@ bash scripts/embedding_bi_encoder/smoke_test.sh
 
 If that passes, the pipeline is wired correctly and you can move to the recipes below with real data.
 
+To smoke-test every recipe end-to-end (mining + scoring side-stages + train + recipe-specific assertion for all 8), use the full driver. First run downloads ~150 MB of HF models for mining/scoring; after that each recipe is ~1–2 min on CPU.
+
+```bash
+bash scripts/embedding_bi_encoder/smoke_test_all.sh           # all 8 recipes
+bash scripts/embedding_bi_encoder/smoke_test_all.sh 3         # just Recipe 3
+bash scripts/embedding_bi_encoder/smoke_test_all.sh 4 5 8     # a subset
+```
+
+Each recipe ships its own complete smoke YAML at [configs/embedding/bi_encoder/smoke_r&lt;N&gt;.yaml](../../configs/embedding/bi_encoder/) — these double as the minimal working template for adapting Recipe N to your real data.
+
 ---
 
 ## Recipes

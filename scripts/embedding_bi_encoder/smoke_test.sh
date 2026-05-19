@@ -11,8 +11,8 @@
 set -euo pipefail
 
 DATA_DIR="data/processed/smoke-bi-encoder"
-OUT_DIR="outputs/smoke_bi_encoder/final"
-CONFIG="configs/embedding/bi_encoder/smoke.yaml"
+OUT_DIR="outputs/smoke_bi_encoder_r1/final"
+CONFIG="configs/embedding/bi_encoder/smoke_r1.yaml"
 
 echo "============================================================"
 echo "Step 1/3  Build the synthetic dataset"

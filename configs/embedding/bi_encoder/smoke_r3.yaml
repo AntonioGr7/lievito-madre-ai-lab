@@ -1,0 +1,65 @@
+# Smoke-test config for Recipe 3 — Listwise KL distillation (distill shape).
+# Input is a dataset produced by `score_with_cross_encoder.py` over a mined
+# multi_negative dataset — adds a `label` column carrying teacher scores.
+# Loss switches to DistillKLDivLoss; the student learns the teacher's full
+# ranking shape over candidates, not just the order.
+# Worked example: this is the minimal complete config for Recipe 3.
+
+processed_dir: data/processed/smoke-distill
+model_name: sentence-transformers/all-MiniLM-L6-v2
+output_dir: outputs/smoke_bi_encoder_r3
+experiment_id: null
+attn_implementation: sdpa
+
+num_train_epochs: 1
+max_steps: -1
+per_device_train_batch_size: 4
+per_device_eval_batch_size: 8
+gradient_accumulation_steps: 1
+learning_rate: 5e-5
+weight_decay: 0.0
+warmup_ratio: 0.0
+max_grad_norm: 1.0
+lr_scheduler_type: linear
+optim: adamw_torch_fused
+seed: 42
+
+eval_strategy: epoch
+save_strategy: epoch
+eval_steps: null
+save_steps: null
+load_best_model_at_end: true
+metric_for_best_model: f1
+greater_is_better: true
+save_total_limit: 1
+early_stopping_patience: null
+
+precision: auto
+gradient_checkpointing: false
+torch_compile: false
+train_sampling_strategy: random
+dataloader_num_workers: 0
+pad_to_multiple_of: 8
+
+logging_steps: 5
+report_to: none
+
+wandb_project: null
+wandb_run_name: null
+wandb_tags: []
+wandb_notes: null
+
+bi_encoder:
+  loss:
+    name: DistillKLDivLoss
+    kwargs:
+      temperature: 2.0                               # softer teacher = more "dark knowledge" transfer
+  batch_sampler: NO_DUPLICATES
+  matryoshka:
+    enabled: false
+  # GradCache is a no-op for DistillKLDivLoss (no cached variant exists —
+  # KL is structurally incompatible with the GradCache pattern). Explicitly
+  # disabled here to avoid the trainer's startup [warn].
+  gradient_caching:
+    enabled: false
+    mini_batch_size: 2

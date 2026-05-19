@@ -1,0 +1,76 @@
+# Smoke-test config for Recipe 8 — Instruction prompts.
+# For backbones that were pre-trained with explicit query/document
+# prefixes (E5, Nomic Embed, BGE-M3, …). Fine-tuning WITHOUT the prefixes
+# drifts the model off its own protocol and silently degrades retrieval.
+#
+# MiniLM-L6-v2 is NOT an instruction-tuned model — for SMOKE purposes we
+# wire arbitrary "query: " / "passage: " prefixes to exercise the
+# end-to-end plumbing: per-column prefixes at train time, auto-derived
+# inference prompts, and `predictor.encode(prompt_name="query")` at serve.
+# For real Recipe 8 work, use prefixes matching your backbone (see README).
+# Worked example: this is the minimal complete config for Recipe 8.
+
+processed_dir: data/processed/smoke-bi-encoder
+model_name: sentence-transformers/all-MiniLM-L6-v2
+output_dir: outputs/smoke_bi_encoder_r8
+experiment_id: null
+attn_implementation: sdpa
+
+num_train_epochs: 1
+max_steps: -1
+per_device_train_batch_size: 4
+per_device_eval_batch_size: 8
+gradient_accumulation_steps: 1
+learning_rate: 5e-5
+weight_decay: 0.0
+warmup_ratio: 0.0
+max_grad_norm: 1.0
+lr_scheduler_type: linear
+optim: adamw_torch_fused
+seed: 42
+
+eval_strategy: epoch
+save_strategy: epoch
+eval_steps: null
+save_steps: null
+load_best_model_at_end: true
+metric_for_best_model: f1
+greater_is_better: true
+save_total_limit: 1
+early_stopping_patience: null
+
+precision: auto
+gradient_checkpointing: false
+torch_compile: false
+train_sampling_strategy: random
+dataloader_num_workers: 0
+pad_to_multiple_of: 8
+
+logging_steps: 5
+report_to: none
+
+wandb_project: null
+wandb_run_name: null
+wandb_tags: []
+wandb_notes: null
+
+bi_encoder:
+  loss:
+    name: MultipleNegativesRankingLoss
+    kwargs:
+      scale: 20.0
+  batch_sampler: NO_DUPLICATES
+  matryoshka:
+    enabled: false
+  gradient_caching:
+    enabled: true
+    mini_batch_size: 2
+  prompts:
+    # Per-column prefix applied during training. Maps column → prefix.
+    columns:
+      anchor:   "query: "
+      positive: "passage: "
+    # `inference` omitted → auto-derived from columns:
+    #   {"query": "query: ", "document": "passage: "}
+    # Persisted on the saved model; predictor.encode(prompt_name="query") works
+    # out of the box after training.

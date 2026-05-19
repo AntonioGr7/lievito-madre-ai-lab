@@ -1,0 +1,62 @@
+# Smoke-test config for Recipe 6 — Ensemble mining (dense + BM25).
+# Same training shape as Recipe 2 (multi_negative), but the negatives come
+# from a UNION of dense retrievers + BM25, deduped and re-filtered by a
+# cross-encoder. Yields a broader hardness distribution (semantic + lexical
+# failure modes) than any single retriever.
+# Worked example: this is the minimal complete config for Recipe 6.
+
+processed_dir: data/processed/smoke-mined-ensemble
+model_name: sentence-transformers/all-MiniLM-L6-v2
+output_dir: outputs/smoke_bi_encoder_r6
+experiment_id: null
+attn_implementation: sdpa
+
+num_train_epochs: 1
+max_steps: -1
+per_device_train_batch_size: 4
+per_device_eval_batch_size: 8
+gradient_accumulation_steps: 1
+learning_rate: 5e-5
+weight_decay: 0.0
+warmup_ratio: 0.0
+max_grad_norm: 1.0
+lr_scheduler_type: linear
+optim: adamw_torch_fused
+seed: 42
+
+eval_strategy: epoch
+save_strategy: epoch
+eval_steps: null
+save_steps: null
+load_best_model_at_end: true
+metric_for_best_model: f1
+greater_is_better: true
+save_total_limit: 1
+early_stopping_patience: null
+
+precision: auto
+gradient_checkpointing: false
+torch_compile: false
+train_sampling_strategy: random
+dataloader_num_workers: 0
+pad_to_multiple_of: 8
+
+logging_steps: 5
+report_to: none
+
+wandb_project: null
+wandb_run_name: null
+wandb_tags: []
+wandb_notes: null
+
+bi_encoder:
+  loss:
+    name: MultipleNegativesRankingLoss
+    kwargs:
+      scale: 20.0
+  batch_sampler: NO_DUPLICATES
+  matryoshka:
+    enabled: false
+  gradient_caching:
+    enabled: true
+    mini_batch_size: 2

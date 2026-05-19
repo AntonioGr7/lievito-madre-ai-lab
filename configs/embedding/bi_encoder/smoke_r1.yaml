@@ -1,10 +1,12 @@
-# Smoke-test config — exercises Recipe 1 end-to-end in under 2 minutes.
-# Pair this with examples/embedding_bi_encoder/prepare_smoke.py and
+# Smoke-test config for Recipe 1 — Quick MNRL baseline (pair shape).
+# Exercises in-batch-negative MNRL + GradCache auto-swap end-to-end.
+# Pair with examples/embedding_bi_encoder/prepare_smoke.py and
 # scripts/embedding_bi_encoder/smoke_test.sh.
+# Worked example: this is the minimal complete config for Recipe 1.
 
 processed_dir: data/processed/smoke-bi-encoder
 model_name: sentence-transformers/all-MiniLM-L6-v2   # 22M params — runs everywhere, even CPU
-output_dir: outputs/smoke_bi_encoder
+output_dir: outputs/smoke_bi_encoder_r1
 experiment_id: null
 attn_implementation: sdpa
 
