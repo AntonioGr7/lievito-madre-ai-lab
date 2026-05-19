@@ -6,7 +6,10 @@ attn_implementation: sdpa                      # "sdpa" | "flash_attention_2" | 
 
 num_train_epochs: 1                            # MNRL converges fast; 1-3 epochs typical
 max_steps: -1
-per_device_train_batch_size: 32                # bigger = more in-batch negatives = better
+# In-batch-negatives quality scales with the LOGICAL batch. GradCache below
+# keeps peak memory bounded by mini_batch_size, so this can be set well
+# above what plain MNRL would allow. Drop to 64-128 on 16 GB GPUs / T4.
+per_device_train_batch_size: 256
 per_device_eval_batch_size: 64
 gradient_accumulation_steps: 1                 # MNRL benefits from REAL big batches —
                                                # accumulation does NOT increase negatives
@@ -50,12 +53,31 @@ wandb_notes: null
 bi_encoder:
   loss:
     name: MultipleNegativesRankingLoss         # for distillation: DistillKLDivLoss
-                                               # for memory-bound: CachedMultipleNegativesRankingLoss
     kwargs:
-      scale: 20.0                              # logit temperature for MNRL
-      # mini_batch_size: 32                    # only for CachedMNRL — enables huge effective batches
+      # ── MNRL / CachedMNRL ──
+      scale: 20.0                              # = 1 / temperature. 20 ≈ temp 0.05. Higher = sharper softmax,
+                                               # harder learning signal. 10-50 is the useful range.
+
+      # ── DistillKLDivLoss ──
+      # temperature: 2.0                       # softens the teacher's score distribution. 1.0 = vanilla,
+                                               # 2.0-4.0 transfers more "dark knowledge" (relative rankings
+                                               # of low-scoring candidates, not just which is on top).
+                                               # Sweet spot depends on teacher; start at 2.0 and tune.
 
   batch_sampler: NO_DUPLICATES                 # safest under in-batch-negatives losses
+
+  # GradCache: ON by default in this lab. In-batch-negatives losses (MNRL)
+  # need large effective batches to produce SOTA-quality embeddings — and
+  # on a single GPU, plain MNRL caps you well below what you'd actually
+  # want. Caching splits the batch into mini_batch_size chunks; memory
+  # cost is bounded by mini_batch_size, not by per_device_train_batch_size.
+  # ~30-50% slower per step, but a quality win at any memory-bound scale.
+  # The trainer auto-swaps MNRL → CachedMNRL transparently.
+  # (No effect on DistillKLDivLoss — KL has no cached variant; a warning
+  # is printed and training proceeds without caching.)
+  gradient_caching:
+    enabled: true                              # lab default — always on for MNRL
+    mini_batch_size: 32                        # largest chunk that fits without OOM
 
   # Matryoshka: one model, multiple useful embedding dims (and optionally
   # multiple useful encoder depths). Trade speed/storage vs. quality at

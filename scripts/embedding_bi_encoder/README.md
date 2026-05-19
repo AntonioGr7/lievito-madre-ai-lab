@@ -14,6 +14,8 @@ The default backbone is [`nomic-ai/modernbert-embed-base`](https://huggingface.c
 
 Pick the row that matches your starting point. Each cell links to the recipe below.
 
+**GradCache is on by default** in every shipped YAML — see [the reference section](#gradcache-gradient-caching-the-memory-trick). The lab assumes you want to train at the batch size that produces good embeddings, not the batch size your GPU happens to fit.
+
 | You have… | You want… | Recipe |
 |---|---|---|
 | `(anchor, positive)` pairs, no time to mine | Working baseline today | [Recipe 1 — Quick MNRL baseline](#recipe-1--quick-mnrl-baseline) |
@@ -26,6 +28,14 @@ Pick the row that matches your starting point. Each cell links to the recipe bel
 | You're using E5 / Nomic / BGE-M3 | Don't drift off the protocol | [Recipe 8 — Instruction prompts](#recipe-8--instruction-prompts) |
 
 Stack the recipes. The full SOTA setup is **2 + 3 + 5 + 6 + 8** in one run.
+
+**Before you start**, sanity-check the install with the smoke test — builds a synthetic 100-row dataset, runs Recipe 1 end-to-end in ~2 minutes, and verifies the saved model can tell a paraphrase from an unrelated sentence:
+
+```bash
+bash scripts/embedding_bi_encoder/smoke_test.sh
+```
+
+If that passes, the pipeline is wired correctly and you can move to the recipes below with real data.
 
 ---
 
@@ -42,7 +52,11 @@ python scripts/embedding_bi_encoder/train_bi_encoder.py \
     --config configs/embedding/bi_encoder/modernbert_mnrl.yaml
 ```
 
-The trainer auto-picks `MultipleNegativesRankingLoss` with `NO_DUPLICATES` batch sampling. Bigger batch = more negatives = better embeddings — push `per_device_train_batch_size` as high as the GPU holds. If you're memory-bound, switch to `CachedMultipleNegativesRankingLoss` and set `kwargs.mini_batch_size: 32` — same loss, way larger effective batches.
+The trainer auto-picks `MultipleNegativesRankingLoss` with `NO_DUPLICATES` batch sampling. **GradCache is already on** in the shipped YAML — the loss is transparently swapped to its cached variant, so `per_device_train_batch_size: 256` is the default and memory stays bounded by `mini_batch_size: 32`.
+
+If you OOM, lower `mini_batch_size` first (peak memory drops). Only lower `per_device_train_batch_size` once `mini_batch_size` is already tiny — shrinking the logical batch directly hurts model quality.
+
+See [the GradCache reference](#gradcache-gradient-caching-the-memory-trick) for the full story.
 
 ---
 
@@ -302,13 +316,79 @@ Splits within a single `DatasetDict` must share a shape.
 
 Configured under `bi_encoder.loss.name`. Registry in [trainer.py](../../lievito_madre_ai_lab/embedding/bi_encoder/trainer.py):
 
-| Loss | Shape | When to use |
-|---|---|---|
-| `MultipleNegativesRankingLoss` *(default)* | pair / triplet / multi_negative | Standard retrieval fine-tuning. Bigger batches = more negatives. |
-| `CachedMultipleNegativesRankingLoss` | same as MNRL | GPU memory caps the batch. `kwargs.mini_batch_size: 32` enables much larger effective batches by caching forward passes. |
-| `DistillKLDivLoss` | distill | Listwise KL distillation from a cross-encoder teacher. Recipe 3 / Recipe 7. |
+| Loss | Shape | GradCache | When to use |
+|---|---|---|---|
+| `MultipleNegativesRankingLoss` *(default)* | pair / triplet / multi_negative | ✓ auto-swap | Standard retrieval fine-tuning. Bigger batches = more negatives. |
+| `CachedMultipleNegativesRankingLoss` | same as MNRL | (already cached) | Explicit cached MNRL. Prefer the auto-swap below — same effect, cleaner config. |
+| `DistillKLDivLoss` | distill | ✗ no-op + warn | Listwise KL distillation. Recipe 3 / Recipe 7. KL is structurally incompatible with the GradCache pattern. |
 
 Each loss can be optionally wrapped in `MatryoshkaLoss` (1D) or `Matryoshka2dLoss` (2D) via the `bi_encoder.matryoshka` block.
+
+### GradCache (gradient caching) — the memory trick
+
+**Always on** in every shipped config. Plain in-batch-negatives losses (MNRL and its cousins) require every (anchor, positive) embedding in the batch to live in GPU memory *simultaneously*. That fundamentally limits the batch size on a single GPU — and **batch size is the single biggest quality lever for in-batch-negatives training** (more negatives per anchor = harder learning signal).
+
+Concrete cap, single GPU:
+
+| Backbone | GPU | Plain-MNRL batch cap | What you actually want |
+|---|---|---|---|
+| MiniLM-L6 | 24 GB | ~256 | ~256 ✓ |
+| ModernBERT-base / BGE-base | 24 GB | ~64 | ~512 |
+| BGE-large / ModernBERT-large | 24 GB | ~16 | ~512 |
+| any large model | 80 GB | ~64 | ~1024 |
+
+GradCache fixes this by splitting the batch into `mini_batch_size` chunks, running forward per-chunk to collect embeddings + their gradients, then backpropagating chunk-by-chunk. Memory cost is bounded by `mini_batch_size`, **not** by the logical batch size — so you can train with effective batch 1024 on a GPU that would normally cap at 32.
+
+Trade-off: each step is ~30–50% slower (the model is re-run during the second pass). For any memory-bound setup, this is a net quality win — *not* training at large batch hurts the model far more than a slower step.
+
+Shipped defaults (see [modernbert_mnrl.yaml](../../configs/embedding/bi_encoder/modernbert_mnrl.yaml)):
+
+```yaml
+per_device_train_batch_size: 256       # logical batch the loss sees
+bi_encoder:
+  loss:
+    name: MultipleNegativesRankingLoss # auto-swapped to CachedMNRL
+  gradient_caching:
+    enabled: true                      # always on
+    mini_batch_size: 32                # the largest chunk that fits without OOM
+```
+
+The trainer prints `[gradcache] MultipleNegativesRankingLoss → CachedMultipleNegativesRankingLoss (mini_batch_size=32)` at startup so the swap is visible.
+
+When `gradient_caching.enabled` is paired with a loss that has no cached variant (e.g. `DistillKLDivLoss`), the trainer prints a `[warn]` and proceeds without caching. The distillation recipe already uses much smaller batches by design — caching matters less there.
+
+**How to tune** for your hardware:
+
+| GPU | Backbone | Suggested batch | Suggested mini_batch_size |
+|---|---|---|---|
+| T4 / 16 GB | ModernBERT-base | 64-128 | 16 |
+| 3090 / 4090 / A6000 (24 GB) | ModernBERT-base | 256 (default) | 32 |
+| A100 (40 GB) | BGE-large | 256-512 | 32 |
+| A100 (80 GB) / H100 | any | 512-1024 | 64-128 |
+| CPU only | MiniLM-L6 | 32-64 | 8-16 |
+
+Rule of thumb:
+- **OOM → halve `mini_batch_size` first**, not `per_device_train_batch_size`. The logical batch is what controls quality; the mini-batch is just the memory dial.
+- Larger `mini_batch_size` = faster per step (fewer chunks to re-run).
+- The effective batch (`per_device_train_batch_size × gradient_accumulation_steps × world_size`) is what the loss sees — push it to 256+ for serious training.
+
+### Temperature scaling
+
+Three independent temperatures shape the learning signal — tuning any one of them changes how the model trains, often more than the choice of loss itself.
+
+| Where | YAML field | Default | What it controls | Useful range |
+|---|---|---|---|---|
+| **MNRL / CachedMNRL** softmax sharpness | `bi_encoder.loss.kwargs.scale` (= 1 / temperature) | `20.0` (≈ temp 0.05) | How sharply the contrastive softmax peaks on the positive vs. in-batch negatives. Higher scale = harder learning signal but more gradient noise. | `10`–`50` |
+| **DistillKLDivLoss** teacher softmax temperature | `bi_encoder.loss.kwargs.temperature` | `1.0` | How soft the teacher's score distribution is. Higher = student sees more of the teacher's "dark knowledge" — the relative rankings of *low-scoring* candidates, not just which is on top. Most retrieval distillation papers use `2.0`–`4.0`, not `1.0`. | `1.0`–`4.0` |
+| **Matryoshka 2D** layer-alignment KL | `bi_encoder.matryoshka.kl_temperature` | `0.3` | Sharpness of the KL term that pulls earlier layers' output distributions toward the last layer's. Lower = sharper alignment, less tolerance for divergent intermediate representations. | `0.1`–`1.0` |
+
+When to actually tune:
+
+- **MNRL scale**: leave at `20.0` unless you see (a) training loss plateauing instantly (lower scale to `10`) or (b) loss exploding with large effective batches (raise to `30`–`50`).
+- **DistillKLDivLoss temperature**: this one *matters*. Sweep `[1.0, 2.0, 4.0]` on a small slice — the differences are often 1–2 MRR points. Higher temperature is especially helpful when the teacher is much stronger than the student.
+- **Matryoshka 2D kl_temperature**: rarely needs tuning. Only revisit if 2D-trained layer-truncated inference is much worse than the same model at full depth.
+
+The three temperatures don't interact directly — they live in different parts of the loss graph. You can change one without re-tuning the others.
 
 ### Evaluator selection
 
@@ -468,6 +548,8 @@ Then plug into Recipes 2 → 6 to add mining and (optionally) distillation.
 | Eval metric plateaus instantly | Mining produces near-duplicates of the positive | Raise `--range-min` (default 10 → try 20-50) |
 | Many rows dropped during mining | Filter too aggressive | Loosen `--relative-margin` (0.4 → 0.3) or raise `--range-max` |
 | Training loss flat from step 1 | Tokenizer mismatch (silent before this lab) | Re-check `model_name` vs `preprocessing.json` — the guard now hard-errors |
+| Quality plateaus far below published numbers | Effective batch too small (in-batch negatives need ≥256) | Bump `per_device_train_batch_size`. GradCache is already on by default, so memory stays bounded by `mini_batch_size`. |
+| OOM | `mini_batch_size` too large for the GPU | Halve `mini_batch_size` first — logical batch can stay where it is. Only shrink `per_device_train_batch_size` once `mini_batch_size` is tiny. |
 | Inference quality much worse than eval | Forgot prompts on an instruction-tuned model | Add `bi_encoder.prompts.columns` and re-train |
 | `truncate_layers` produces garbage embeddings | Model trained without `mode: "2d"` | Layer truncation requires Matryoshka2d / AdaptiveLayer training |
 | `DistillKLDivLoss` raises shape error | Dataset doesn't have a teacher-score `label` column | Run `score_with_cross_encoder.py` first |

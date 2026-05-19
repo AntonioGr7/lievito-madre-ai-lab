@@ -28,6 +28,7 @@ from lievito_madre_ai_lab.embedding.bi_encoder.evaluate import build_evaluator
 from lievito_madre_ai_lab.embedding.bi_encoder.model import load_sentence_transformer
 from lievito_madre_ai_lab.embedding.bi_encoder.trainer import (
     BiEncoderTrainCfg,
+    GradientCachingCfg,
     MatryoshkaCfg,
     build_loss,
     build_trainer,
@@ -47,7 +48,13 @@ def _load_config_with_bi_encoder_block(path: str) -> tuple[TrainConfig, BiEncode
 
     loss = raw.get("loss", {}) or {}
     mat = raw.get("matryoshka", {}) or {}
+    gc_raw = raw.get("gradient_caching", {}) or {}
     prompts = raw.get("prompts", {}) or {}
+
+    gradient_caching_cfg = GradientCachingCfg(
+        enabled=bool(gc_raw.get("enabled", False)),
+        mini_batch_size=int(gc_raw.get("mini_batch_size", 32)),
+    )
 
     matryoshka_cfg = MatryoshkaCfg(
         enabled=bool(mat.get("enabled", False)),
@@ -66,6 +73,7 @@ def _load_config_with_bi_encoder_block(path: str) -> tuple[TrainConfig, BiEncode
         loss_kwargs=loss.get("kwargs", {}) or {},
         batch_sampler=raw.get("batch_sampler", "NO_DUPLICATES"),
         matryoshka=matryoshka_cfg,
+        gradient_caching=gradient_caching_cfg,
         column_prompts=prompts.get("columns", {}) or {},
     )
     # `inference_prompts` is carried through to model.load — stored on the

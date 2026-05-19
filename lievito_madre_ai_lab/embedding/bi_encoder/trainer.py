@@ -45,6 +45,17 @@ LOSS_REGISTRY = {
     "DistillKLDivLoss": DistillKLDivLoss,
 }
 
+# Mapping from a plain loss name → its GradCache-enabled variant. Used by
+# `bi_encoder.gradient_caching.enabled: true` to swap the loss without the
+# user having to rename it in the YAML. Losses absent from this mapping
+# don't have a cached variant (e.g. DistillKLDivLoss — KL is structurally
+# incompatible with the GradCache pattern).
+CACHED_LOSS_MAP = {
+    "MultipleNegativesRankingLoss": "CachedMultipleNegativesRankingLoss",
+    # Already cached — toggling caching is a no-op.
+    "CachedMultipleNegativesRankingLoss": "CachedMultipleNegativesRankingLoss",
+}
+
 
 @dataclass
 class MatryoshkaCfg:
@@ -83,12 +94,39 @@ class MatryoshkaCfg:
 
 
 @dataclass
+class GradientCachingCfg:
+    """GradCache: train contrastive losses with effectively unbounded batches.
+
+    Plain MNRL requires every (anchor, positive) pair in a batch to fit in
+    GPU memory simultaneously — fine for tiny models, but on a single 24 GB
+    GPU with ModernBERT-base / BGE-large you cap out around batch 32-64.
+    That's *much* smaller than the 256-1024 effective batches that produce
+    SOTA-quality embeddings (in-batch negatives scale with the batch).
+
+    GradCache splits the batch into ``mini_batch_size`` chunks, runs the
+    forward pass per-chunk, caches the embeddings + their gradients, then
+    backpropagates through each chunk independently. Memory cost is bounded
+    by ``mini_batch_size``, not by ``per_device_train_batch_size``.
+
+    Trade-off: ~30-50% slower per step than plain MNRL (the model is run
+    over each chunk twice), but enables 4-32× larger effective batches —
+    a net quality win for almost any memory-bound setup.
+
+    Only applies to contrastive losses with a cached variant
+    (``CACHED_LOSS_MAP``). For DistillKLDivLoss this is a no-op + warning.
+    """
+    enabled: bool = False
+    mini_batch_size: int = 32  # tune to the largest that fits without OOM
+
+
+@dataclass
 class BiEncoderTrainCfg:
     """Bi-encoder knobs that don't fit into the shared `TrainConfig`."""
     loss_name: str = "MultipleNegativesRankingLoss"
     loss_kwargs: dict = field(default_factory=dict)
     batch_sampler: str = "NO_DUPLICATES"
     matryoshka: MatryoshkaCfg = field(default_factory=MatryoshkaCfg)
+    gradient_caching: GradientCachingCfg = field(default_factory=GradientCachingCfg)
     # Per-column prompt prefixes applied during training. E.g.,
     # {"anchor": "search_query: ", "positive": "search_document: "}.
     # The trainer forwards this dict to SentenceTransformerTrainingArguments.
@@ -203,9 +241,31 @@ def build_training_args(
 
 def build_loss(model: SentenceTransformer, bec: BiEncoderTrainCfg):
     """Instantiate the loss object selected in the YAML, optionally wrapped
-    in Matryoshka for multi-dimensional training."""
-    loss_cls = LOSS_REGISTRY[bec.loss_name]
-    base = loss_cls(model, **bec.loss_kwargs)
+    in Matryoshka for multi-dimensional training. When
+    ``gradient_caching.enabled`` is on, transparently swaps the loss for
+    its GradCache-enabled variant and injects ``mini_batch_size``.
+    """
+    loss_name = bec.loss_name
+    loss_kwargs = dict(bec.loss_kwargs)
+
+    if bec.gradient_caching.enabled:
+        cached_name = CACHED_LOSS_MAP.get(loss_name)
+        if cached_name is None:
+            print(
+                f"      [warn] gradient_caching.enabled=true but "
+                f"{loss_name!r} has no cached variant — caching ignored."
+            )
+        else:
+            if cached_name != loss_name:
+                print(
+                    f"      [gradcache] {loss_name} → {cached_name} "
+                    f"(mini_batch_size={bec.gradient_caching.mini_batch_size})"
+                )
+            loss_name = cached_name
+            loss_kwargs["mini_batch_size"] = bec.gradient_caching.mini_batch_size
+
+    loss_cls = LOSS_REGISTRY[loss_name]
+    base = loss_cls(model, **loss_kwargs)
 
     if bec.matryoshka.enabled:
         if bec.matryoshka.mode == "2d":
