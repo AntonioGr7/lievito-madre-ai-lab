@@ -27,6 +27,7 @@ from lievito_madre_ai_lab.embedding.bi_encoder.dataset import (
 from lievito_madre_ai_lab.embedding.bi_encoder.evaluate import build_evaluator
 from lievito_madre_ai_lab.embedding.bi_encoder.model import load_sentence_transformer
 from lievito_madre_ai_lab.embedding.bi_encoder.trainer import (
+    BidirectionalCfg,
     BiEncoderTrainCfg,
     GradientCachingCfg,
     MatryoshkaCfg,
@@ -49,11 +50,17 @@ def _load_config_with_bi_encoder_block(path: str) -> tuple[TrainConfig, BiEncode
     loss = raw.get("loss", {}) or {}
     mat = raw.get("matryoshka", {}) or {}
     gc_raw = raw.get("gradient_caching", {}) or {}
+    bd_raw = raw.get("bidirectional", {}) or {}
     prompts = raw.get("prompts", {}) or {}
 
     gradient_caching_cfg = GradientCachingCfg(
         enabled=bool(gc_raw.get("enabled", False)),
         mini_batch_size=int(gc_raw.get("mini_batch_size", 32)),
+    )
+
+    bidirectional_cfg = BidirectionalCfg(
+        enabled=bool(bd_raw.get("enabled", False)),
+        weight=float(bd_raw.get("weight", 1.0)),
     )
 
     matryoshka_cfg = MatryoshkaCfg(
@@ -74,6 +81,7 @@ def _load_config_with_bi_encoder_block(path: str) -> tuple[TrainConfig, BiEncode
         batch_sampler=raw.get("batch_sampler", "NO_DUPLICATES"),
         matryoshka=matryoshka_cfg,
         gradient_caching=gradient_caching_cfg,
+        bidirectional=bidirectional_cfg,
         column_prompts=prompts.get("columns", {}) or {},
     )
     # `inference_prompts` is carried through to model.load — stored on the
@@ -175,6 +183,13 @@ def main() -> None:
             f"      [warn] dataset shape is 'distill' but loss is {bec.loss_name!r}. "
             f"The 'label' column will be ignored by this loss."
         )
+    if bec.bidirectional.enabled and shape != "pair":
+        print(
+            f"      [warn] bidirectional.enabled=true with shape {shape!r}. "
+            f"Only columns 0/1 are swapped in the backward pass; trailing "
+            f"hard negatives stay in place. Well-defined but less standard "
+            f"than the pair-shape usage — see BidirectionalLoss docstring."
+        )
 
     # ------------------------------------------------------------------
     # 2. Load the SentenceTransformer backbone.
@@ -271,6 +286,11 @@ def main() -> None:
         sidecar_fields["default_truncate_dim"] = min(bec.matryoshka.dims)
         if bec.matryoshka.mode == "2d":
             sidecar_fields["matryoshka_n_layers_per_step"] = bec.matryoshka.n_layers_per_step
+    if bec.bidirectional.enabled:
+        sidecar_fields["bidirectional"] = {
+            "enabled": True,
+            "weight": bec.bidirectional.weight,
+        }
     if inference_prompts:
         sidecar_fields["inference_prompts"] = inference_prompts
     if prep_meta is not None:

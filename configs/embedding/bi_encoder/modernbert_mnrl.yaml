@@ -79,6 +79,29 @@ bi_encoder:
     enabled: true                              # lab default — always on for MNRL
     mini_batch_size: 32                        # largest chunk that fits without OOM
 
+  # Bidirectional training: extract a second contrastive signal from the
+  # same (query, document) data by also training the document → query
+  # direction. The base loss is called twice per step — once in dataset
+  # order (q is anchor, in-batch softmax over docs), once with cols 0/1
+  # swapped (d is anchor, in-batch softmax over queries). Per-column
+  # prompts stay bound to columns, so the doc is always encoded with
+  # 'search_document: ' and the query with 'search_query: ' regardless
+  # of which one is currently the anchor — the dataset never needs
+  # doc/doc rows.
+  #
+  # Best on `pair` shape with asymmetric prompts (this config). For
+  # `triplet` / `multi_negative` shapes only cols 0/1 swap; trailing hard
+  # negatives stay in place (well-defined but less standard — a warn is
+  # emitted). Incompatible with DistillKLDivLoss (KL has no direction).
+  #
+  # Cost: ~2× the loss-time per step (encoder runs once per direction).
+  # Step latency is less than 2× end-to-end because data-loading / eval /
+  # optimiser cost is unchanged. Composes cleanly with GradCache and
+  # Matryoshka.
+  bidirectional:
+    enabled: false                               # flip to true to enable
+    weight: 1.0                                  # λ on the backward (d → q) term
+
   # Matryoshka: one model, multiple useful embedding dims (and optionally
   # multiple useful encoder depths). Trade speed/storage vs. quality at
   # inference with a single artifact.

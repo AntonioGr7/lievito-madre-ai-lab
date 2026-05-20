@@ -94,6 +94,35 @@ class MatryoshkaCfg:
 
 
 @dataclass
+class BidirectionalCfg:
+    """Train both directions of an asymmetric retrieval loss simultaneously.
+
+    Enables :class:`BidirectionalLoss`, which calls the configured
+    contrastive loss twice per step — once with columns in dataset order
+    (query → document), once with columns 0/1 swapped (document → query).
+    The backward term is scaled by ``weight`` before being added to the
+    forward term.
+
+    The dataset stays unchanged: you still provide ``(query, document)``
+    (+ optional hard negatives) rows. Bidirectional training extracts a
+    second contrastive signal from the same data — in-batch normalization
+    over queries (backward) in addition to over documents (forward).
+
+    Not applicable to ``DistillKLDivLoss``: listwise KL distillation has
+    no notion of direction (the teacher distribution IS the target). The
+    config raises at parse time if both are enabled.
+    """
+    enabled: bool = False
+    weight: float = 1.0
+
+    def __post_init__(self) -> None:
+        if self.weight < 0:
+            raise ValueError(
+                f"bidirectional.weight must be ≥ 0; got {self.weight}."
+            )
+
+
+@dataclass
 class GradientCachingCfg:
     """GradCache: train contrastive losses with effectively unbounded batches.
 
@@ -127,6 +156,7 @@ class BiEncoderTrainCfg:
     batch_sampler: str = "NO_DUPLICATES"
     matryoshka: MatryoshkaCfg = field(default_factory=MatryoshkaCfg)
     gradient_caching: GradientCachingCfg = field(default_factory=GradientCachingCfg)
+    bidirectional: BidirectionalCfg = field(default_factory=BidirectionalCfg)
     # Per-column prompt prefixes applied during training. E.g.,
     # {"anchor": "search_query: ", "positive": "search_document: "}.
     # The trainer forwards this dict to SentenceTransformerTrainingArguments.
@@ -148,6 +178,87 @@ class BiEncoderTrainCfg:
                     f"matryoshka.weights length ({len(self.matryoshka.weights)}) "
                     f"must match dims length ({len(self.matryoshka.dims)})."
                 )
+        if self.bidirectional.enabled and self.loss_name == "DistillKLDivLoss":
+            raise ValueError(
+                "bidirectional.enabled=true is incompatible with "
+                "DistillKLDivLoss. Listwise KL distillation has no notion "
+                "of direction — the teacher distribution IS the target."
+            )
+
+
+class BidirectionalLoss(torch.nn.Module):
+    """Train both directions of an asymmetric retrieval objective.
+
+    Calls the inner contrastive ``loss`` twice per step:
+
+    - **forward** (query → document): sentence_features in their natural
+      dataset order. Anchor is column 0; the in-batch softmax normalises
+      over every other row's positive + hard negatives.
+    - **backward** (document → query): columns 0 and 1 are swapped before
+      the loss is called. Anchor is now what was column 1 (the document);
+      the in-batch softmax normalises over every other row's anchor +
+      hard negatives.
+
+    The returned loss is ``forward + weight * backward``.
+
+    Cosine similarity itself is symmetric, so per-pair scores don't change
+    between the two passes — but each pass *normalises against a different
+    candidate set*. Forward asks "which document fits this query?";
+    backward asks "which query fits this doc?". On asymmetric retrieval
+    setups (E5 / Nomic / BGE-style instruction-tuned backbones) the second
+    signal typically tightens query↔document alignment beyond what
+    forward-only MNRL achieves.
+
+    No prefix swapping happens here. Per-column prompts are bound to
+    dataset columns upstream of the loss, so the doc is always encoded
+    with ``search_document:`` and the query with ``search_query:`` —
+    regardless of which one currently sits in the "anchor" position.
+
+    **Cost.** Each pass re-runs the encoder on every column, so this
+    roughly doubles loss-time per step. Step latency does not double
+    end-to-end because the optimiser/data-loading/eval cost is unchanged.
+
+    **Composition.** Placed inside ``build_loss`` as the innermost
+    wrapper: ``Matryoshka(Bidirectional((Cached)MNRL))``. Matryoshka
+    encodes once and slices per dim; at each dim it calls Bidirectional,
+    which calls the base contrastive loss twice. Putting Bidirectional
+    *outside* Matryoshka would duplicate the multi-dim pass — same
+    result, ~2× cost.
+
+    **Shape semantics.** For ``triplet`` / ``multi_negative`` only columns
+    0 and 1 are swapped; trailing hard negatives stay in place. They were
+    mined as documents that *looked like* the gold positive, so they
+    don't become good queries for the document either — keeping them as
+    extra contrastive candidates in the backward pass is well-defined,
+    if less standard than the pair-shape usage.
+
+    **Incompatibility.** DistillKLDivLoss has no direction (KL onto a
+    teacher distribution). :class:`BiEncoderTrainCfg` rejects the combo
+    at config time.
+    """
+
+    def __init__(
+        self,
+        model: SentenceTransformer,
+        loss: torch.nn.Module,
+        weight: float = 1.0,
+    ) -> None:
+        super().__init__()
+        self.model = model
+        self.loss = loss
+        self.weight = float(weight)
+
+    def forward(self, sentence_features, labels=None):
+        features = list(sentence_features)
+        if len(features) < 2:
+            raise ValueError(
+                f"BidirectionalLoss requires ≥2 sentence_features "
+                f"(anchor + positive); got {len(features)}."
+            )
+        loss_fwd = self.loss(features, labels)
+        swapped = [features[1], features[0], *features[2:]]
+        loss_bwd = self.loss(swapped, labels)
+        return loss_fwd + self.weight * loss_bwd
 
 
 def _resolve_precision(precision: str) -> tuple[bool, bool, bool]:
@@ -282,6 +393,16 @@ def build_loss(model: SentenceTransformer, bec: BiEncoderTrainCfg):
 
     loss_cls = LOSS_REGISTRY[loss_name]
     base = loss_cls(model, **loss_kwargs)
+
+    # BidirectionalLoss is the inner wrapper so Matryoshka's per-dim
+    # slicing applies once and the two contrastive passes share the same
+    # sliced embeddings (see BidirectionalLoss.__doc__ "Composition").
+    if bec.bidirectional.enabled:
+        print(
+            f"      [bidirectional] forward + {bec.bidirectional.weight} × backward "
+            f"({loss_name} called twice per step, cols 0↔1 swapped)"
+        )
+        base = BidirectionalLoss(model, base, weight=bec.bidirectional.weight)
 
     if bec.matryoshka.enabled:
         if bec.matryoshka.mode == "2d":
