@@ -48,9 +48,11 @@ from sentence_transformers import CrossEncoder, SentenceTransformer
 
 from lievito_madre_ai_lab.embedding.bi_encoder.mining import (
     MiningConfig,
+    RetrieverSpec,
     mine_ensemble_for_dataset,
     mine_hard_negatives_for_dataset,
     mine_with_bm25_for_dataset,
+    resolve_prompts,
 )
 from lievito_madre_ai_lab.shared.preprocessing import (
     load_preprocessing_meta,
@@ -108,6 +110,23 @@ def parse_args() -> argparse.Namespace:
         help="Path to a newline-delimited text file (one document per line) to use as the negative pool. "
              "When set, replaces the default 'union of positives' corpus.",
     )
+    p.add_argument(
+        "--query-prompt", action="append", default=[], metavar="MODEL=PREFIX",
+        help="Override the query prefix for a retriever. Format 'model/name=prefix '. "
+             "Repeat once per retriever. Wins over the auto-detection registry. "
+             "Trailing/leading whitespace in PREFIX is preserved verbatim — E5 / Nomic "
+             "prefixes require a trailing space.",
+    )
+    p.add_argument(
+        "--corpus-prompt", action="append", default=[], metavar="MODEL=PREFIX",
+        help="Override the corpus prefix for a retriever. Same format as --query-prompt.",
+    )
+    p.add_argument(
+        "--no-auto-prompts", action="store_true",
+        help="Disable auto-detection of instruction prefixes for known model families "
+             "(E5, BGE, Nomic, mxbai, Arctic). Use only if you've manually overridden "
+             "every retriever with --query-prompt / --corpus-prompt.",
+    )
     p.add_argument("--seed", type=int, default=42)
     return p.parse_args()
 
@@ -128,6 +147,54 @@ def _validate_args(args: argparse.Namespace) -> None:
         args.relative_margin = None
 
 
+def _parse_prompt_overrides(items: list[str], flag: str) -> dict[str, str]:
+    """Parse repeated 'MODEL=PREFIX' flags into a dict.
+
+    Whitespace inside PREFIX is preserved — every prefix-required family
+    (E5, Nomic, BGE-en) ends with a literal trailing space that's part of
+    the protocol, so stripping would silently break the prefix.
+    """
+    out: dict[str, str] = {}
+    for item in items:
+        if "=" not in item:
+            raise SystemExit(f"{flag} expects 'MODEL=PREFIX', got: {item!r}")
+        model, _, prefix = item.partition("=")
+        out[model] = prefix
+    return out
+
+
+def _build_retriever_specs(
+    args: argparse.Namespace,
+) -> list[RetrieverSpec]:
+    """Construct one :class:`RetrieverSpec` per ``--retriever`` flag.
+
+    Resolution order: explicit ``--query-prompt``/``--corpus-prompt`` override
+    → :func:`resolve_prompts` registry (unless ``--no-auto-prompts``) → None.
+    Prints a per-retriever line so misconfiguration is visible at load time.
+    """
+    q_overrides = _parse_prompt_overrides(args.query_prompt, "--query-prompt")
+    c_overrides = _parse_prompt_overrides(args.corpus_prompt, "--corpus-prompt")
+
+    specs: list[RetrieverSpec] = []
+    for name in args.retriever:
+        model = SentenceTransformer(name)
+        q = q_overrides.get(name)
+        c = c_overrides.get(name)
+        if not args.no_auto_prompts:
+            auto_q, auto_c = resolve_prompts(name)
+            if q is None:
+                q = auto_q
+            if c is None:
+                c = auto_c
+        if q is None and c is None:
+            print(f"      [prompts] {name}: no prefix "
+                  f"(symmetric or unknown — pass --query-prompt to override)")
+        else:
+            print(f"      [prompts] {name}: query={q!r}  corpus={c!r}")
+        specs.append(RetrieverSpec(model=model, query_prompt=q, corpus_prompt=c))
+    return specs
+
+
 def main() -> None:
     args = parse_args()
     _validate_args(args)
@@ -138,7 +205,7 @@ def main() -> None:
 
     print(f"[2/4] Loading retrievers={args.retriever or '—'}  "
           f"bm25={args.bm25}  cross_encoder={args.cross_encoder or '—'} …")
-    retrievers = [SentenceTransformer(r) for r in args.retriever]
+    retriever_specs = _build_retriever_specs(args)
     cross_encoder = CrossEncoder(args.cross_encoder) if args.cross_encoder else None
 
     corpus = _load_corpus(args.corpus_file)
@@ -165,9 +232,11 @@ def main() -> None:
     for split_name, split in datasets.items():
         pre = len(split)
         if args.strategy == "dense":
+            spec = retriever_specs[0]
             out = mine_hard_negatives_for_dataset(
-                split, retriever=retrievers[0], cross_encoder=cross_encoder,
+                split, retriever=spec.model, cross_encoder=cross_encoder,
                 cfg=cfg, corpus=corpus,
+                query_prompt=spec.query_prompt, corpus_prompt=spec.corpus_prompt,
             )
         elif args.strategy == "bm25":
             out = mine_with_bm25_for_dataset(
@@ -175,7 +244,7 @@ def main() -> None:
             )
         else:  # ensemble
             out = mine_ensemble_for_dataset(
-                split, retrievers=retrievers, use_bm25=args.bm25,
+                split, retrievers=retriever_specs, use_bm25=args.bm25,
                 cross_encoder=cross_encoder, cfg=cfg, corpus=corpus,
             )
         mined[split_name] = out
@@ -192,6 +261,14 @@ def main() -> None:
     prep["mining"] = {
         "strategy": args.strategy,
         "retrievers": args.retriever,
+        "retriever_prompts": [
+            {
+                "model": name,
+                "query_prompt": spec.query_prompt,
+                "corpus_prompt": spec.corpus_prompt,
+            }
+            for name, spec in zip(args.retriever, retriever_specs)
+        ],
         "bm25": args.bm25,
         "cross_encoder": args.cross_encoder,
         "num_negatives": cfg.num_negatives,

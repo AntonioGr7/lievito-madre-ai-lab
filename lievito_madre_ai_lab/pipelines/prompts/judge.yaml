@@ -1,0 +1,49 @@
+# LLM-judge prompt for (query, chunk) pair filtering.
+#
+# The generator over-produces on purpose — diversity costs nothing extra at
+# generation time, and a noisy query is much cheaper to drop than to train
+# on. The judge rates each pair on relevance + specificity and the pipeline
+# keeps only those at or above the threshold (default 4/5).
+#
+# Why 5-point: a binary judge is too lossy (you lose the "marginal" tier
+# that's useful to retain on small corpora), a continuous score is hard to
+# calibrate across runs. Discrete 1-5 is the standard for this task and
+# what most retrieval-IR papers use for LLM-as-judge.
+
+system: |
+  You rate retrieval training pairs on a 1-5 scale. A pair is (query,
+  passage). High scores mean the passage is clearly the best answer to the
+  query AND the query is self-contained enough to be issued cold at
+  inference (no passage shown to the user). Output strict JSON:
+  {"score": <int 1-5>, "reason": "<short>"}
+
+  Hard rule — automatic score of 1: the query references the passage
+  reflexively (e.g. "the passage", "the document", "this text", "this doc",
+  "the regulation mentioned", "in the passage", "according to the text",
+  or any equivalent in another language). Such a query is unanswerable in
+  isolation and useless for training a retriever — score 1 regardless of
+  how well the passage matches.
+
+  Scale:
+  - 5: The passage directly and completely answers the query. The query
+       is specific enough (names an entity, identifier, date, or
+       distinctive term) that this passage is clearly the best match.
+  - 4: The passage answers the query, though slightly off-topic phrasing
+       or partial coverage is acceptable. The query is still specific
+       enough to identify this passage among many.
+  - 3: The passage is related but does not actually answer the query, OR
+       the query is so generic (no specific entity/identifier/term) that
+       many passages could match.
+  - 2: Tangential overlap only; the passage does not answer the query.
+  - 1: Unrelated, contradictory, OR the query references the passage
+       reflexively and would be unanswerable in isolation.
+
+user: |
+  Query: {query}
+
+  Passage:
+  ---
+  {chunk_text}
+  ---
+
+  Rate the pair. Output ONLY the JSON object.

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from sentence_transformers import SentenceTransformer
 from torch import nn
 
@@ -80,6 +82,19 @@ def load_sentence_transformer(
     model_kwargs: dict = {}
     if attn_implementation:
         model_kwargs["attn_implementation"] = attn_implementation
+
+    # Catch the "stage 2 prerequisite missing" case (Recipe 5 continuing
+    # from Recipe 4's output) before the SentenceTransformer constructor
+    # rewrites it as an opaque HF-hub 404. Heuristic: path-shaped strings
+    # (with a separator) that don't resolve locally aren't HF repo IDs.
+    if ("/" in model_name or "\\" in model_name) and not Path(model_name).exists():
+        if any(seg in model_name for seg in ("outputs/", "outputs\\", "./", ".\\")):
+            raise FileNotFoundError(
+                f"model_name {model_name!r} looks like a local checkpoint path "
+                f"but doesn't exist. If this is a two-stage recipe (e.g. Recipe 5 "
+                f"continuing from Recipe 4), run stage 1 first to produce the "
+                f"checkpoint, then re-run this config."
+            )
 
     model = SentenceTransformer(
         model_name,

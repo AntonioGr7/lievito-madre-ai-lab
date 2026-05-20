@@ -22,7 +22,7 @@ from lievito_madre_ai_lab.shared.preprocessing import load_preprocessing_meta
 print(f"[serve loaded from: {_serve.__file__}]")
 BiEncoderPredictor = _serve.BiEncoderPredictor
 
-MODEL_DIR = "outputs/smoke_bi_encoder_r1/final"
+MODEL_DIR = "outputs/smoke_bi_encoder_r2/final"
 
 QUERY = "How do vector databases work?"
 CORPUS = [

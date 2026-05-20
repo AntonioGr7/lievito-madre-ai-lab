@@ -1,23 +1,38 @@
-# Smoke-test config for Recipe 5 — Matryoshka 2D (dim × depth).
-# One artifact serves heterogeneous hardware: full model at full dim on
-# strong GPUs; shallow truncated version of the SAME weights on edge.
-# Layer truncation is applied at INFERENCE time (predictor's
-# `truncate_layers=N`) but only works on Matryoshka2d / AdaptiveLayer-
-# trained models — that's what this config produces.
-# Worked example: this is the minimal complete config for Recipe 5.
+# Smoke-test config for Recipe 5 — Matryoshka 2D (dim × depth), STAGE 2.
+#
+# Recipe 5 is a TWO-STAGE training, because AdaptiveLayerLoss (the depth
+# half of Matryoshka 2D) is structurally incompatible with cached losses
+# (GradCache). Running 2D from scratch at small batch is what causes
+# Recipe 5 quality to collapse in practice — in-batch-negatives need
+# hundreds of negatives to produce SOTA embeddings.
+#
+# The fix the best labs use: train the dim axis FIRST with GradCache
+# (= Recipe 4, 1D Matryoshka + cached MNRL at big batch), then continue
+# briefly with the 2D loss at a smaller batch — only the depth axis
+# needs to be taught, and the model already has a strong embedding
+# space from stage 1.
+#
+#   stage 1: train_bi_encoder.py --config smoke_r4.yaml    # 1D + GradCache, big batch
+#   stage 2: train_bi_encoder.py --config smoke_r5.yaml    # this file — 2D, small batch, low LR
+#
+# At inference the saved artifact supports BOTH dim-truncation and
+# layer-truncation (predictor's `truncate_dim=N` and `truncate_layers=N`).
 
-processed_dir: data/processed/smoke-bi-encoder
-model_name: sentence-transformers/all-MiniLM-L6-v2   # 6 layers, native dim 384
+# ── Stage-2 input: Recipe 4's output ────────────────────────────────────
+processed_dir: data/processed/smoke-bi-encoder-distill
+model_name: outputs/smoke_bi_encoder_r4/final        # produced by smoke_r4.yaml
 output_dir: outputs/smoke_bi_encoder_r5
 experiment_id: null
 attn_implementation: sdpa
 
+# Stage 2 is a SHORT continuation of an already fine-tuned model — fewer
+# epochs, lower LR (10× smaller than stage 1), no warmup.
 num_train_epochs: 1
 max_steps: -1
 per_device_train_batch_size: 4
 per_device_eval_batch_size: 8
 gradient_accumulation_steps: 1
-learning_rate: 5e-5
+learning_rate: 5e-6                                  # 1/10th of stage 1 — continuing from a tuned model
 weight_decay: 0.0
 warmup_ratio: 0.0
 max_grad_norm: 1.0
@@ -58,7 +73,10 @@ bi_encoder:
   batch_sampler: NO_DUPLICATES
   matryoshka:
     enabled: true
-    mode: "2d"                                       # depth × dim
+    mode: "2d"                                       # depth × dim — adds the AdaptiveLayer half
+    # dims MUST match stage 1's (smoke_r4.yaml) — otherwise stage 2 is
+    # asking the model to map to a different set of truncation points
+    # than stage 1 trained, and the partial-dim quality collapses.
     dims: [384, 256, 128, 64]
     n_layers_per_step: 1                             # train every layer; 4 = train every 4th (cheaper)
     last_layer_weight: 1.0
@@ -66,5 +84,10 @@ bi_encoder:
     kl_div_weight: 1.0                               # aligns earlier layers' outputs with the last
     kl_temperature: 0.3
   gradient_caching:
-    enabled: true
+    # AdaptiveLayer (mode="2d") is structurally incompatible with cached
+    # losses — the cached losses bypass the model forward decorator that
+    # AdaptiveLayer relies on. The trainer auto-disables caching with a
+    # `[warn]` if you flip this on. Keep off and use stage 1 (Recipe 4)
+    # for the big-batch portion of training.
+    enabled: false
     mini_batch_size: 2

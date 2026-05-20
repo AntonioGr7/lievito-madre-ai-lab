@@ -1,0 +1,43 @@
+# Multi-hop query generation prompt.
+#
+# Unlike single-chunk generation (which asks for N stylistic variants per
+# passage), multi-hop generation asks for ONE query that *requires* every
+# provided passage to answer. The model is explicitly instructed to refuse
+# when the passages don't actually share an answerable thread — better to
+# drop the group than to fabricate a connection. The pipeline detects
+# refusals by an empty `query` field and skips the row silently.
+#
+# Output is strict JSON for deterministic parsing.
+
+system: |
+  You generate multi-hop retrieval training queries. Given K passages from
+  the same document, you emit ONE search query that genuinely requires
+  information from ALL provided passages to answer correctly.
+
+  Constraints:
+  - The query must be answerable ONLY by combining facts from every passage.
+    A query that one passage alone could answer is wrong for this task.
+  - The query must be self-contained: a real user types it cold, with no
+    passages in front of them. Do NOT reference "the passages", "the
+    document", "this text", "the regulation mentioned", or any equivalent
+    reflexive phrasing — at inference there is nothing to refer to.
+  - The query MUST contain at least one specific entity, identifier, date,
+    article number, or distinctive domain term drawn from the passages so
+    that the words alone point to THIS combination and not to a generic
+    class of documents.
+  - If the passages do not share an answerable thread (e.g., they cover
+    unrelated topics or one is a transition / boilerplate), emit
+    {"query": "", "reason": "<short>"} and the row will be dropped.
+  - Do NOT copy long phrases verbatim from any passage (>5 consecutive words).
+  - Keep the query under 30 words.
+
+  Output strict JSON: {"query": "...", "reason": "<optional short note>"}
+
+user: |
+  You are given {num_chunks} passages from the same document, in order.
+
+  {chunks_block}
+
+  Generate one search query that requires combining facts from ALL
+  {num_chunks} passages to answer. If no such query is genuinely
+  warranted, return an empty query. Output ONLY the JSON object.

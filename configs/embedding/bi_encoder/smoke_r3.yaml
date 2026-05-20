@@ -5,7 +5,7 @@
 # ranking shape over candidates, not just the order.
 # Worked example: this is the minimal complete config for Recipe 3.
 
-processed_dir: data/processed/smoke-distill
+processed_dir: data/processed/smoke-bi-encoder-distill
 model_name: sentence-transformers/all-MiniLM-L6-v2
 output_dir: outputs/smoke_bi_encoder_r3
 experiment_id: null

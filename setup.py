@@ -73,6 +73,19 @@ extras_require = {
     ],
 
     # ------------------------------------------------------------------ #
+    # Pipelines — LLM-driven synthetic data generation                   #
+    # Tasks: build (anchor, positive) training pairs from raw documents  #
+    # using an OpenAI-compatible LLM (cloud or local vLLM/Ollama).       #
+    # Decoupled from any specific downstream task: outputs land as HF    #
+    # DatasetDicts that feed the encoder / embedding / decoder groups.   #
+    # ------------------------------------------------------------------ #
+    "pipelines": _base + [
+        "openai>=1.40.0",        # async client; OpenAI-compatible (vLLM, Ollama, ...)
+        "pyyaml>=6.0.0",         # YAML configs + prompt templates
+        "python-dotenv>=1.0.0",  # OPENAI_API_KEY from .env
+    ],
+
+    # ------------------------------------------------------------------ #
     # GLiNER — open-vocabulary entity extraction (urchade/GLiNER)        #
     # Tasks: open-vocab NER, zero-shot entity extraction                 #
     # NOTE: gliner 0.2.x requires transformers<5.2.0, so this group is   #

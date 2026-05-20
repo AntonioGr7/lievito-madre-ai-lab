@@ -1,0 +1,100 @@
+# Default config for the bi-encoder synthetic-pair pipeline.
+#
+# All paths are relative to the repo root. The CLI loads this file, overlays
+# any --override flags, and runs documents → chunks → pairs → DatasetDict.
+#
+# Inputs and outputs ----------------------------------------------------------
+input_path: data/raw/example_corpus.jsonl   # jsonl with {id, text} per line, OR a HF dataset dir
+output_dir: data/processed/example-corpus-pairs
+input_format: auto                      # auto | jsonl | hf_dataset
+text_column: text
+id_column: id
+
+# Document cap for quick iteration. Set to e.g. 50 to dry-run the whole
+# pipeline against a tiny slice before paying for 10k chunks of LLM calls.
+max_documents: null
+
+# Chunking --------------------------------------------------------------------
+chunking:
+  chunk_tokens: 512
+  overlap_tokens: 32
+  min_chunk_tokens: 64
+  encoding_name: cl100k_base   # GPT-4 family tokenizer — close to most embedder vocabs
+
+# Query generation ------------------------------------------------------------
+# `styles` is the list of styles to emit per chunk. Each style produces one
+# query, so num_queries_per_chunk == len(styles). Keys must match the YAML at
+# lievito_madre_ai_lab/pipelines/prompts/query_gen.yaml.
+query_gen:
+  styles:
+    - natural_question
+    - keyword_query
+    - paraphrased_statement
+  batch_size: 64
+
+# Multi-hop (intra-document) query generation --------------------------------
+# For each document, pick adjacent K-chunk windows and ask the LLM for ONE
+# query that requires combining facts from all K chunks. Each accepted
+# query is emitted as K separate (anchor, positive) rows — MNRL handles
+# this natively. Disable with enabled: false to recover the original
+# single-hop-only pipeline.
+#
+# `target_share` is the FRACTION OF FINAL GENERATED ROWS that should come
+# from multi-hop (not the fraction of adjacent windows to sample). The
+# pipeline converts this into an absolute window count using the corpus
+# stats: ~ target_share / (1 - target_share) × n_chunks × |styles| / k.
+# So target_share=0.2 means "out of every 10 generated pairs, ~2 are
+# multi-hop and ~8 are single-hop", regardless of |styles| or k.
+multi_hop:
+  enabled: true
+  k: 2               # chunks per multi-hop query (>= 2)
+  target_share: 0.2  # fraction of final rows that should be multi-hop
+  stride: 1          # window step; set to k for non-overlapping windows
+  batch_size: 32     # smaller than single-hop — multi-hop prompts carry K passages
+  seed: 42
+
+# LLM (generation) ------------------------------------------------------------
+# Concurrency 16 is safe for OpenAI tier-1; bump much higher for a local vLLM.
+gen_llm:
+  model: gpt-4o-mini
+  temperature: 0.7
+  max_tokens: 800
+  max_concurrency: 16
+  timeout: 60
+  max_retries: 4
+  # base_url: http://localhost:8000/v1   # uncomment to target a local vLLM/Ollama
+
+# Heuristic filter ------------------------------------------------------------
+filter:
+  min_query_words: 3
+  max_query_words: 30
+  max_verbatim_overlap: 6     # longest run of consecutive words copied from passage
+  drop_duplicate_anchors: true
+
+# LLM judge (second pass) -----------------------------------------------------
+# Keep enabled for the production run; disable for the dry-run to save spend.
+# If unset, judge_llm falls back to gen_llm.
+judge:
+  enabled: true
+  min_score: 4
+  batch_size: 64
+
+judge_llm:
+  model: gpt-4o-mini    # bump to gpt-4o for a stronger judge if you can afford it
+  temperature: 0.0      # judge should be deterministic
+  max_tokens: 100
+  max_concurrency: 16
+  timeout: 60
+  max_retries: 4
+
+# Splits ----------------------------------------------------------------------
+# Always doc-level. Row-level splitting leaks chunks of the same document
+# across train/dev/test and inflates eval scores.
+train_ratio: 0.9
+dev_ratio: 0.05
+test_ratio: 0.05
+seed: 42
+
+# Intermediate artefacts (debugging + resumability) ---------------------------
+save_chunks: true       # writes output_dir/chunks.jsonl
+save_raw_pairs: true    # writes output_dir/raw_pairs.jsonl (pre-filter)

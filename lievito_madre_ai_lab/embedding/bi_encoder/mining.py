@@ -44,6 +44,59 @@ from sentence_transformers.util import mine_hard_negatives
 OutputFormat = Literal["triplet", "n-tuple", "labeled-pair", "labeled-list"]
 
 
+# ──────────────────────────────────────────────────────────────────────────
+# Instruction-prompt registry for prefix-required retrievers
+# ──────────────────────────────────────────────────────────────────────────
+# Several SoTA embedders were pre-trained with mandatory query/document
+# prefixes. Calling them without the prefix degrades (BGE, mxbai) or fully
+# collapses (E5, Nomic) the embedding space — every candidate then scores
+# ~as high as the positive and the relative_margin filter wipes them all
+# out. Matched by name prefix so a whole sub-family (small/base/large,
+# v1/v1.5/v2) shares one entry.
+KNOWN_PROMPTS: list[tuple[str, str | None, str | None]] = [
+    # E5 — prefixes are MANDATORY.
+    ("intfloat/e5-",                       "query: ",          "passage: "),
+    ("intfloat/multilingual-e5-",          "query: ",          "passage: "),
+    # BGE-en — asymmetric: long query instruction, bare passages.
+    ("BAAI/bge-large-en",                  "Represent this sentence for searching relevant passages: ", None),
+    ("BAAI/bge-base-en",                   "Represent this sentence for searching relevant passages: ", None),
+    ("BAAI/bge-small-en",                  "Represent this sentence for searching relevant passages: ", None),
+    # mxbai / Snowflake Arctic — same BGE-style instruction.
+    ("mixedbread-ai/mxbai-embed-large-v1", "Represent this sentence for searching relevant passages: ", None),
+    ("Snowflake/snowflake-arctic-embed-",  "Represent this sentence for searching relevant passages: ", None),
+    # Nomic — search_query / search_document.
+    ("nomic-ai/nomic-embed-text",          "search_query: ",   "search_document: "),
+    ("nomic-ai/modernbert-embed-",         "search_query: ",   "search_document: "),
+]
+
+
+def resolve_prompts(model_name: str) -> tuple[str | None, str | None]:
+    """Auto-detect ``(query_prompt, corpus_prompt)`` for a retriever by name.
+
+    Returns ``(None, None)`` for unknown models — the caller decides whether
+    that's safe (genuine symmetric model: gte, mpnet, all-MiniLM) or a
+    misconfiguration the registry hasn't learned yet. The mining script
+    prints the resolved prompts so misconfiguration is visible.
+    """
+    for prefix, q, c in KNOWN_PROMPTS:
+        if model_name.startswith(prefix):
+            return q, c
+    return None, None
+
+
+@dataclass
+class RetrieverSpec:
+    """A retriever paired with its (optional) instruction prefixes.
+
+    The ensemble path needs to track prompts per retriever — members of
+    the ensemble use different protocols. Wrapping them avoids parallel
+    lists at the call site.
+    """
+    model: SentenceTransformer
+    query_prompt: str | None = None
+    corpus_prompt: str | None = None
+
+
 @dataclass
 class MiningConfig:
     """Knobs for the mining helpers. The dense fields map onto ST's
@@ -80,11 +133,20 @@ def mine_hard_negatives_for_dataset(
     cross_encoder: CrossEncoder | None = None,
     cfg: MiningConfig | None = None,
     corpus: list[str] | None = None,
+    query_prompt: str | None = None,
+    corpus_prompt: str | None = None,
 ) -> Dataset:
     """Mine hard negatives with a dense bi-encoder retriever.
 
     `corpus` defaults to the unique positives in `dataset`. Pass a larger
     pool (e.g. all documents in your archive) for stronger mining.
+
+    `query_prompt` / `corpus_prompt` are the instruction prefixes the
+    retriever was trained with (``"query: "`` / ``"passage: "`` for E5,
+    ``"search_query: "`` / ``"search_document: "`` for Nomic, etc.). Skip
+    them on a prefix-required model and the embedding space collapses —
+    candidates score ~as high as the positive and `relative_margin` drops
+    everything. Use :func:`resolve_prompts` to look these up by model name.
     """
     cfg = cfg or MiningConfig()
 
@@ -105,6 +167,8 @@ def mine_hard_negatives_for_dataset(
         batch_size=cfg.batch_size,
         anchor_column_name=cfg.anchor_column,
         positive_column_name=cfg.positive_column,
+        query_prompt=query_prompt,
+        corpus_prompt=corpus_prompt,
         verbose=cfg.verbose,
     )
     if corpus is not None:
@@ -154,40 +218,64 @@ def mine_with_bm25_for_dataset(
 
     pos_to_idx = {p: i for i, p in enumerate(corpus_texts)}
 
-    # For each anchor, slice candidates[range_min:range_max], drop the
-    # positive if present, optionally cross-encoder-filter, then keep the
-    # top num_negatives.
-    rows = []
-    for i, (anchor, positive) in enumerate(zip(anchors, positives)):
+    # Build per-anchor candidate windows up front so the CE pass can batch
+    # across all anchors. Per-anchor CE calls are what makes this step
+    # silently hang on CPU — dispatch overhead × len(anchors), no
+    # progress bar.
+    if cfg.sampling_strategy == "random":
+        import random
+        rng = random.Random()
+    else:
+        rng = None
+
+    all_cand_texts: list[list[str]] = []
+    for i, positive in enumerate(positives):
         cand_ids = list(doc_indices[i])
-        # Drop the positive itself before applying the range window.
         pos_idx = pos_to_idx.get(positive)
         if pos_idx is not None:
             cand_ids = [c for c in cand_ids if c != pos_idx]
         windowed = cand_ids[cfg.range_min : cfg.range_max]
-        if cfg.sampling_strategy == "random":
-            import random
-            random.shuffle(windowed)
+        if rng is not None:
+            rng.shuffle(windowed)
+        all_cand_texts.append([corpus_texts[c] for c in windowed])
 
-        # Pull candidate texts.
-        cand_texts = [corpus_texts[c] for c in windowed]
+    # Cross-encoder filter: two batched calls — one for positives, one
+    # for the flattened candidate pool — instead of 2 × len(anchors)
+    # tiny calls.
+    if cross_encoder is not None:
+        pos_scores = cross_encoder.predict(
+            list(zip(anchors, positives)),
+            batch_size=cfg.batch_size,
+            show_progress_bar=cfg.verbose,
+        )
+        flat_pairs = [(anchors[i], t) for i, texts in enumerate(all_cand_texts) for t in texts]
+        flat_scores = cross_encoder.predict(
+            flat_pairs,
+            batch_size=cfg.batch_size,
+            show_progress_bar=cfg.verbose,
+        )
+        per_anchor_scores: list[list[float]] = []
+        offset = 0
+        for texts in all_cand_texts:
+            n = len(texts)
+            per_anchor_scores.append([float(s) for s in flat_scores[offset:offset + n]])
+            offset += n
+    else:
+        pos_scores = None
+        per_anchor_scores = [[] for _ in anchors]
 
-        # Optional cross-encoder filter at the 60%-of-positive threshold.
+    rows = []
+    for i, (anchor, positive) in enumerate(zip(anchors, positives)):
+        cand_texts = all_cand_texts[i]
+
         if cross_encoder is not None and cand_texts:
-            pos_score = float(cross_encoder.predict([(anchor, positive)])[0])
-            cand_scores = cross_encoder.predict(
-                [(anchor, t) for t in cand_texts],
-                batch_size=cfg.batch_size,
-                show_progress_bar=False,
-            )
-            cap = _filter_cap(cfg, pos_score)
+            cap = _filter_cap(cfg, float(pos_scores[i]))
             kept = [
-                (t, float(s)) for t, s in zip(cand_texts, cand_scores)
+                (t, s) for t, s in zip(cand_texts, per_anchor_scores[i])
                 if (cap is None or s <= cap)
                 and (cfg.min_score is None or s >= cfg.min_score)
                 and (cfg.max_score is None or s <= cfg.max_score)
             ]
-            # Take the top-`num_negatives` after filtering (or keep order on `random`).
             if cfg.sampling_strategy == "top":
                 kept.sort(key=lambda kv: -kv[1])
             cand_texts = [t for t, _ in kept]
@@ -230,7 +318,7 @@ def _filter_cap(cfg: MiningConfig, pos_score: float) -> float | None:
 def mine_ensemble_for_dataset(
     dataset: Dataset,
     *,
-    retrievers: list[SentenceTransformer],
+    retrievers: list[RetrieverSpec],
     use_bm25: bool = False,
     cross_encoder: CrossEncoder | None = None,
     cfg: MiningConfig | None = None,
@@ -243,6 +331,11 @@ def mine_ensemble_for_dataset(
     flag semantically-close-but-wrong passages, BM25 flags lexically-close-
     but-wrong ones. The union maximises diversity; the cross-encoder filter
     keeps only candidates that are genuinely wrong.
+
+    Each :class:`RetrieverSpec` carries its own instruction prefixes — the
+    members of an ensemble routinely use different protocols (BGE's long
+    English instruction vs. E5's ``"query: "`` vs. Nomic's
+    ``"search_query: "``), so prompts can't be set once at the call site.
 
     Per-anchor pipeline:
 
@@ -257,19 +350,35 @@ def mine_ensemble_for_dataset(
         raise ValueError("Ensemble mining needs at least one retriever or use_bm25=True.")
 
     cfg = cfg or MiningConfig()
-    # Over-mine per source so dedup doesn't starve us.
-    per_source_cfg = MiningConfig(**{**cfg.__dict__, "num_negatives": cfg.num_negatives * 2})
+    # Over-mine per source so dedup doesn't starve us, AND disable every
+    # score-based filter — the union-level cross-encoder pass below is the
+    # one filter calibrated for the 60%-of-positive rule. Leaving
+    # relative_margin/margin/min_score/max_score on at the per-source step
+    # makes ST apply them to the *retriever's own* cosine scores, which
+    # are model-dependent: BGE's spread tolerates it, E5's tight cluster
+    # silently drops ~all candidates, and the per-retriever signal we
+    # asked for never reaches the union.
+    per_source_cfg = MiningConfig(**{
+        **cfg.__dict__,
+        "num_negatives": cfg.num_negatives * 2,
+        "relative_margin": None,
+        "margin": None,
+        "min_score": None,
+        "max_score": None,
+    })
 
     per_source: list[Dataset] = []
-    for retriever in retrievers:
+    for spec in retrievers:
         per_source.append(
             mine_hard_negatives_for_dataset(
-                dataset, retriever=retriever,
+                dataset, retriever=spec.model,
                 # Skip the per-retriever cross-encoder filter — we do one
                 # pass at the union level instead. Cheaper and consistent.
                 cross_encoder=None,
                 cfg=per_source_cfg,
                 corpus=corpus,
+                query_prompt=spec.query_prompt,
+                corpus_prompt=spec.corpus_prompt,
             )
         )
     if use_bm25:
@@ -281,11 +390,13 @@ def mine_ensemble_for_dataset(
 
     anchors = dataset[cfg.anchor_column]
     positives = dataset[cfg.positive_column]
-    rows = []
-    for i, (anchor, positive) in enumerate(zip(anchors, positives)):
-        # Union the candidate negatives from every source for this row.
+
+    # Per-anchor candidate pool: union across sources, dedupe, drop the
+    # positive itself. No scoring yet — we batch that next.
+    all_candidates: list[list[str]] = []
+    for i, positive in enumerate(positives):
         seen: set[str] = set()
-        candidates: list[str] = []
+        cands: list[str] = []
         for src in per_source:
             if i >= len(src):
                 continue
@@ -296,19 +407,50 @@ def mine_ensemble_for_dataset(
                 cand = row[col]
                 if cand and cand not in seen and cand != positive:
                     seen.add(cand)
-                    candidates.append(cand)
+                    cands.append(cand)
+        all_candidates.append(cands)
 
-        # Cross-encoder filter at the union level (60%-of-positive rule).
+    # Cross-encoder filter at the union level (60%-of-positive rule).
+    # Score every (anchor, positive) and every (anchor, candidate) in two
+    # large batched calls — one CE call per anchor is what makes this step
+    # appear to hang on CPU: dispatch overhead dominates, the progress bar
+    # is suppressed, and the user sees nothing for minutes.
+    if cross_encoder is not None:
+        pos_scores = cross_encoder.predict(
+            list(zip(anchors, positives)),
+            batch_size=cfg.batch_size,
+            show_progress_bar=cfg.verbose,
+        )
+        flat_pairs = [(anchors[i], c) for i, cands in enumerate(all_candidates) for c in cands]
+        flat_scores = cross_encoder.predict(
+            flat_pairs,
+            batch_size=cfg.batch_size,
+            show_progress_bar=cfg.verbose,
+        )
+        # Slice the flat candidate-score array back per anchor.
+        per_anchor_scores: list[list[float]] = []
+        offset = 0
+        for cands in all_candidates:
+            n = len(cands)
+            per_anchor_scores.append([float(s) for s in flat_scores[offset:offset + n]])
+            offset += n
+    else:
+        pos_scores = None
+        per_anchor_scores = [[] for _ in anchors]
+
+    if cfg.sampling_strategy == "random":
+        import random
+        rng = random.Random()
+    else:
+        rng = None
+
+    rows = []
+    for i, (anchor, positive) in enumerate(zip(anchors, positives)):
+        candidates = all_candidates[i]
         if cross_encoder is not None and candidates:
-            pos_score = float(cross_encoder.predict([(anchor, positive)])[0])
-            cand_scores = cross_encoder.predict(
-                [(anchor, t) for t in candidates],
-                batch_size=cfg.batch_size,
-                show_progress_bar=False,
-            )
-            cap = _filter_cap(cfg, pos_score)
+            cap = _filter_cap(cfg, float(pos_scores[i]))
             paired = [
-                (t, float(s)) for t, s in zip(candidates, cand_scores)
+                (t, s) for t, s in zip(candidates, per_anchor_scores[i])
                 if (cap is None or s <= cap)
                 and (cfg.min_score is None or s >= cfg.min_score)
                 and (cfg.max_score is None or s <= cfg.max_score)
@@ -316,8 +458,7 @@ def mine_ensemble_for_dataset(
             if cfg.sampling_strategy == "top":
                 paired.sort(key=lambda kv: -kv[1])
             else:
-                import random
-                random.shuffle(paired)
+                rng.shuffle(paired)
             candidates = [t for t, _ in paired]
 
         if len(candidates) < cfg.num_negatives:

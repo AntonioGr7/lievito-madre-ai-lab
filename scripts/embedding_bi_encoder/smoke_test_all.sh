@@ -138,7 +138,7 @@ train_and_verify() {
 run_recipe() {
     local n="$1"
     case "$n" in
-        1|4|5|8)
+        1|4|8)
             prepare_pair_dataset
             ;;
         2)
@@ -146,6 +146,21 @@ run_recipe() {
             ;;
         3)
             prepare_pair_dataset; mine_dense; score_distill
+            ;;
+        5)
+            # Recipe 5 is a TWO-STAGE training: stage 1 = Recipe 4
+            # (1D Matryoshka + GradCache, big batch — teaches the dim
+            # axis), stage 2 = Recipe 5 (2D, small batch, continued from
+            # stage 1 — adds the depth axis). AdaptiveLayer is structurally
+            # incompatible with cached losses, so this split is the only
+            # way to keep GradCache's big-batch quality benefit.
+            prepare_pair_dataset
+            if [[ ! -d "${OUT_BASE}/smoke_bi_encoder_r4/final" ]]; then
+                banner "Recipe 5 │ stage 1 prerequisite (= Recipe 4)"
+                train_and_verify 4
+            else
+                echo "[skip] stage 1 (Recipe 4 output) exists — reusing."
+            fi
             ;;
         6)
             prepare_pair_dataset; mine_ensemble

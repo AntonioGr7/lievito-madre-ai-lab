@@ -248,21 +248,37 @@ def build_loss(model: SentenceTransformer, bec: BiEncoderTrainCfg):
     loss_name = bec.loss_name
     loss_kwargs = dict(bec.loss_kwargs)
 
+    # Matryoshka 2D wraps the base loss in AdaptiveLayerLoss, which
+    # decorates the model's transformer forward to cache
+    # `all_layer_embeddings` and re-invokes the inner loss per layer.
+    # Cached* losses bypass that path (they call `self.model(features)`
+    # directly inside `embed_minibatch`), so the cache key is missing →
+    # KeyError at the first step. The library documents this as
+    # structural (adaptive_layer.py Requirements) and only warns at
+    # init time, so we have to guard here.
+    adaptive_layer_active = bec.matryoshka.enabled and bec.matryoshka.mode == "2d"
+
     if bec.gradient_caching.enabled:
-        cached_name = CACHED_LOSS_MAP.get(loss_name)
-        if cached_name is None:
+        if adaptive_layer_active:
             print(
-                f"      [warn] gradient_caching.enabled=true but "
-                f"{loss_name!r} has no cached variant — caching ignored."
+                f"      [warn] gradient_caching.enabled=true but matryoshka.mode='2d' "
+                f"(AdaptiveLayer) is incompatible with cached losses — caching ignored."
             )
         else:
-            if cached_name != loss_name:
+            cached_name = CACHED_LOSS_MAP.get(loss_name)
+            if cached_name is None:
                 print(
-                    f"      [gradcache] {loss_name} → {cached_name} "
-                    f"(mini_batch_size={bec.gradient_caching.mini_batch_size})"
+                    f"      [warn] gradient_caching.enabled=true but "
+                    f"{loss_name!r} has no cached variant — caching ignored."
                 )
-            loss_name = cached_name
-            loss_kwargs["mini_batch_size"] = bec.gradient_caching.mini_batch_size
+            else:
+                if cached_name != loss_name:
+                    print(
+                        f"      [gradcache] {loss_name} → {cached_name} "
+                        f"(mini_batch_size={bec.gradient_caching.mini_batch_size})"
+                    )
+                loss_name = cached_name
+                loss_kwargs["mini_batch_size"] = bec.gradient_caching.mini_batch_size
 
     loss_cls = LOSS_REGISTRY[loss_name]
     base = loss_cls(model, **loss_kwargs)

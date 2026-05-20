@@ -14,20 +14,20 @@ The default backbone is [`nomic-ai/modernbert-embed-base`](https://huggingface.c
 
 Pick the row that matches your starting point. Each cell links to the recipe below.
 
-**GradCache is on by default** in every shipped YAML — see [the reference section](#gradcache-gradient-caching-the-memory-trick). The lab assumes you want to train at the batch size that produces good embeddings, not the batch size your GPU happens to fit.
+**GradCache is on by default** in every shipped YAML — see [the reference section](#gradcache-gradient-caching--the-memory-trick). The lab assumes you want to train at the batch size that produces good embeddings, not the batch size your GPU happens to fit.
 
 | You have… | You want… | Recipe |
 |---|---|---|
 | `(anchor, positive)` pairs, no time to mine | Working baseline today | [Recipe 1 — Quick MNRL baseline](#recipe-1--quick-mnrl-baseline) |
-| Same, want stronger retrieval | Hard-negative mined model | [Recipe 2 — + Hard negatives](#recipe-2--hard-negatives-the-single-biggest-lever) |
-| Same, want SOTA quality | Cross-encoder distilled | [Recipe 3 — + Listwise KL distillation](#recipe-3--listwise-kl-distillation) |
+| Same, want stronger retrieval | Hard-negative mined model | [Recipe 2 — + Hard negatives](#recipe-2---hard-negatives-the-single-biggest-lever) |
+| Same, want SOTA quality | Cross-encoder distilled | [Recipe 3 — + Listwise KL distillation](#recipe-3---listwise-kl-distillation) |
 | Same, plus a tight serve budget | One model, many dims | [Recipe 4 — Matryoshka (1D)](#recipe-4--matryoshka-1d-one-model-many-dims) |
 | Same, plus heterogeneous serve hardware | Trade dim *and* depth | [Recipe 5 — Matryoshka 2D](#recipe-5--matryoshka-2d-dim--depth) |
 | Heterogeneous failure modes (lexical + semantic) | Maximum negative diversity | [Recipe 6 — Ensemble mining (dense + BM25)](#recipe-6--ensemble-mining-dense--bm25) |
 | Small gold set + a big unlabelled pool | Bootstrap with silver labels | [Recipe 7 — Silver labels from a cross-encoder](#recipe-7--silver-labels-from-a-cross-encoder) |
 | You're using E5 / Nomic / BGE-M3 | Don't drift off the protocol | [Recipe 8 — Instruction prompts](#recipe-8--instruction-prompts) |
 
-Stack the recipes. The full SOTA setup is **2 + 3 + 5 + 6 + 8** in one run.
+Stack the recipes. The full SOTA setup is **6 → 3 → 4 → 5 (+ 8)**, end-to-end walkthrough in [The full SOTA pipeline](#the-full-sota-pipeline).
 
 **Before you start**, sanity-check the install with the smoke test — builds a synthetic 100-row dataset, runs Recipe 1 end-to-end in ~2 minutes, and verifies the saved model can tell a paraphrase from an unrelated sentence:
 
@@ -49,6 +49,66 @@ Each recipe ships its own complete smoke YAML at [configs/embedding/bi_encoder/s
 
 ---
 
+## The full SOTA pipeline
+
+Starting from a `DatasetDict` on disk with `(anchor, positive)` string columns, the highest-quality bi-encoder this lab can produce is **four commands** — ensemble mine, cross-encoder score, two-stage train. It stacks Recipes [6](#recipe-6--ensemble-mining-dense--bm25) → [3](#recipe-3---listwise-kl-distillation) → [4](#recipe-4--matryoshka-1d-one-model-many-dims) → [5](#recipe-5--matryoshka-2d-dim--depth), with Recipe [8](#recipe-8--instruction-prompts) prompts dropped into both training YAMLs if the backbone needs them. Each command writes a new directory the next one reads from — follow them in order and you get one artifact that serves both a full-quality 768-dim path and a quarter-dim / half-depth edge path from the same weights.
+
+The two-stage split isn't a stylistic choice — it's forced by two architectural facts. GradCache (what makes the big-batch dim-axis training tractable on one GPU) cannot wrap `AdaptiveLayerLoss`, the depth half of Matryoshka 2D. And Matryoshka 2D from scratch at small batch is exactly what causes naive single-stage runs to collapse: in-batch-negatives training needs hundreds of negatives per anchor to reach SOTA. The fix is to spend ~95% of the compute on **stage 1** — 1D Matryoshka + GradCache + MNRL at the biggest batch the GPU will fit — where the embedding space and the dim axis are taught, then run a short **stage 2** at small batch and 1/10th the LR to add the depth axis on top.
+
+```bash
+# 1. Mine hard negatives from BOTH a dense retriever AND BM25 — union the
+#    candidate lists, dedupe, re-filter with a cross-encoder. Dense flags
+#    semantic-close-but-wrong; BM25 flags lexical-close-but-wrong. Either
+#    alone leaves a whole class of failure modes unseen.
+python scripts/embedding_bi_encoder/mine_hard_negatives.py \
+    --input-dataset data/processed/my-pairs \
+    --output-dir    data/processed/my-pairs-ensemble \
+    --strategy ensemble \
+    --retriever     BAAI/bge-large-en-v1.5 \
+    --retriever     intfloat/e5-large-v2 \
+    --bm25 \
+    --cross-encoder BAAI/bge-reranker-v2-m3 \
+    --num-negatives 5 \
+    --relative-margin 0.4
+
+# 2. Score every (anchor, candidate) pair with the cross-encoder — appends
+#    a `label` column of teacher scores. These are the soft labels the
+#    distillation pass smooths over: KL transfers the *full ranking shape*
+#    of the teacher, not just which candidate ranked first.
+python scripts/embedding_bi_encoder/score_with_cross_encoder.py \
+    --input-dataset data/processed/my-pairs-ensemble \
+    --output-dir    data/processed/my-pairs-distill \
+    --cross-encoder BAAI/bge-reranker-v2-m3
+
+# 3. Stage 1 — 1D Matryoshka + GradCache + MNRL at the biggest batch your
+#    GPU will allow (256+). This is the heavy lift: the dim axis is taught,
+#    the embedding space is built, and ~95% of the compute goes here. The
+#    `label` column rides along but is ignored by MNRL — it's there for the
+#    polish step. Copy `smoke_r4.yaml`, point `processed_dir` at
+#    `my-pairs-distill`, swap `model_name` to your real backbone, scale the
+#    dims list to the backbone's native dim first.
+python scripts/embedding_bi_encoder/train_bi_encoder.py \
+    --config configs/embedding/bi_encoder/my_sota_stage1.yaml
+
+# 4. Stage 2 — continue from stage 1 with Matryoshka 2D at small batch and
+#    low LR. Adds the depth axis (drop top N transformer layers at inference
+#    and still get meaningful embeddings). The dims list MUST match stage 1
+#    exactly — otherwise stage 2 asks the model to map to different
+#    truncation points than stage 1 trained, and partial-dim quality
+#    collapses. Copy `smoke_r5.yaml`, set
+#    `model_name: outputs/my_sota_stage1/final`.
+python scripts/embedding_bi_encoder/train_bi_encoder.py \
+    --config configs/embedding/bi_encoder/my_sota_stage2.yaml
+```
+
+**Optional fifth step — distillation polish.** Stage 2 above uses MNRL so the depth-axis training stays consistent with stage 1. To actually consume the soft labels written in step 2, run a brief third stage with `bi_encoder.loss.name: DistillKLDivLoss` (temperature 2.0) continuing from stage 2's `final/`, at the same small batch and a few hundred steps. KL distillation has no cached variant and can't compose with GradCache, which is why it lands at the *end* of the pipeline rather than the start — by that point the embedding space is built and the teacher signal only needs to shape the ranking, not learn it from scratch.
+
+**Instruction prompts.** If your backbone is E5, Nomic Embed, BGE-M3, or any instruction-tuned embedder, add the `bi_encoder.prompts.columns` block from [Recipe 8](#recipe-8--instruction-prompts) to *both* training YAMLs. Training without the model's expected prefixes silently drifts retrieval quality even when every other knob is correct.
+
+**What you get.** A single artifact at `outputs/my_sota_stage2/final/` that supports dim truncation (`predictor.encode(texts, truncate_dim=64)`, from stage 1 — preserved through stage 2) and layer truncation (`BiEncoderPredictor(..., truncate_layers=6)`, added by stage 2) — one model serves a full-quality GPU path and a ~10× cheaper edge path from the same weights. See [Inference](#inference) for the serve-side API.
+
+---
+
 ## Recipes
 
 ### Recipe 1 — Quick MNRL baseline
@@ -66,7 +126,7 @@ The trainer auto-picks `MultipleNegativesRankingLoss` with `NO_DUPLICATES` batch
 
 If you OOM, lower `mini_batch_size` first (peak memory drops). Only lower `per_device_train_batch_size` once `mini_batch_size` is already tiny — shrinking the logical batch directly hurts model quality.
 
-See [the GradCache reference](#gradcache-gradient-caching-the-memory-trick) for the full story.
+See [the GradCache reference](#gradcache-gradient-caching--the-memory-trick) for the full story.
 
 ---
 
@@ -165,18 +225,44 @@ The smallest dim lands in `preprocessing.json` as `default_truncate_dim` so stor
 
 **Use when**: you want to serve from heterogeneous hardware — strong GPUs run the full model at full dim, edge devices run a shallow truncated version of the *same* artifact.
 
+**This is a two-stage training.** `Matryoshka2dLoss` wraps the base loss in `AdaptiveLayerLoss`, which decorates the model's forward to cache per-layer embeddings — and cached losses (the GradCache variants) bypass that decorator. Running 2D from scratch at small batch is what makes naive Recipe 5 collapse, because in-batch-negatives need hundreds of negatives to produce SOTA embeddings. The best labs train this in two stages instead:
+
+1. **Stage 1** — train the dim axis with GradCache at a big batch (= Recipe 4 unchanged). This is where ~95% of the compute goes and where the dim-truncation behavior is learned.
+2. **Stage 2** — continue briefly with `Matryoshka2dLoss` at a small batch, low LR. Only the depth axis needs to be taught; the embedding space is already strong from stage 1, so this stage is short.
+
+```bash
+# Stage 1 — 1D Matryoshka + GradCache, big batch (= Recipe 4 as-is)
+python scripts/embedding_bi_encoder/train_bi_encoder.py \
+    --config configs/embedding/bi_encoder/<your_recipe4>.yaml
+
+# Stage 2 — point `model_name` at stage 1's `final/` and flip `mode: "2d"`.
+python scripts/embedding_bi_encoder/train_bi_encoder.py \
+    --config configs/embedding/bi_encoder/<your_recipe5>.yaml
+```
+
+The stage-2 YAML differs from stage 1 in four places (see [`smoke_r5.yaml`](../../configs/embedding/bi_encoder/smoke_r5.yaml) for the full template):
+
 ```yaml
+model_name: outputs/<stage1_run>/final          # continue from stage 1
+learning_rate: 5e-6                              # ~1/10th of stage 1 — refining, not training
+num_train_epochs: 1                              # stage 2 is SHORT
 bi_encoder:
   matryoshka:
-    enabled: true
-    mode: "2d"                          # depth × dim
-    dims: [768, 512, 256, 128, 64]
-    n_layers_per_step: 1                # train every layer; 4 = train every 4th (cheaper)
+    mode: "2d"                                   # adds the AdaptiveLayer (depth) half
+    dims: [768, 512, 256, 128, 64]               # MUST match stage 1's dims
+    n_layers_per_step: 1
     last_layer_weight: 1.0
     prior_layers_weight: 1.0
-    kl_div_weight: 1.0                  # KL term aligning earlier layers' outputs with the last
+    kl_div_weight: 1.0
     kl_temperature: 0.3
+  gradient_caching:
+    enabled: false                               # auto-disabled with a [warn] anyway
 ```
+
+Pitfalls:
+- **dims must match stage 1's** — otherwise stage 2 asks the model to map to a different set of truncation points than stage 1 trained, and the truncated-dim quality collapses.
+- **Stage 2's LR matters.** Inheriting stage 1's LR overshoots and erases the dim alignment. 5e-6 (1/10th) is a safe starting point; tune within 2e-6 ... 1e-5.
+- If you only have one GPU and no time for two stages, you can run a single-stage 2D — just budget for the much smaller batch (32-64) and lean on hard negatives (Recipe 2) to compensate.
 
 At inference, drop encoder layers **before** loading the predictor (it's applied at load time):
 
@@ -332,7 +418,7 @@ Configured under `bi_encoder.loss.name`. Registry in [trainer.py](../../lievito_
 | `CachedMultipleNegativesRankingLoss` | same as MNRL | (already cached) | Explicit cached MNRL. Prefer the auto-swap below — same effect, cleaner config. |
 | `DistillKLDivLoss` | distill | ✗ no-op + warn | Listwise KL distillation. Recipe 3 / Recipe 7. KL is structurally incompatible with the GradCache pattern. |
 
-Each loss can be optionally wrapped in `MatryoshkaLoss` (1D) or `Matryoshka2dLoss` (2D) via the `bi_encoder.matryoshka` block.
+Each loss can be optionally wrapped in `MatryoshkaLoss` (1D) or `Matryoshka2dLoss` (2D) via the `bi_encoder.matryoshka` block. **`mode: "2d"` is incompatible with GradCache** — the AdaptiveLayer wrapper decorates the model's forward to cache `all_layer_embeddings` per layer, but cached losses bypass that path. The trainer detects this and falls back to plain MNRL with a `[warn]`. The recommended path for 2D is the **two-stage training** documented in [Recipe 5](#recipe-5--matryoshka-2d-dim--depth) — keeps GradCache's big-batch benefit on the dim axis and only pays the small-batch tax on the (short) depth-axis stage.
 
 ### GradCache (gradient caching) — the memory trick
 

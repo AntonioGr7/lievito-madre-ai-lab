@@ -1,0 +1,54 @@
+# Multi-style query generation prompt.
+#
+# Diversity of query *style* is the single biggest lever on retrieval
+# generalisation: training on one style (e.g. only natural questions) makes
+# the model brittle to the rest of the distribution it'll see at inference
+# (keyword queries, paraphrased statements, messy user input). We ask one
+# LLM call to emit a mix per chunk so we get the diversity without paying
+# for N separate calls.
+#
+# Output is strict JSON so parsing is deterministic. The `style` field is
+# echoed back to the dataset for stratified evaluation later.
+
+system: |
+  You generate retrieval training data. Given a passage, you emit search
+  queries that the passage answers. Each query MUST be answerable using ONLY
+  the passage — no outside knowledge, no inference beyond what the text
+  states. Vary the style across the requested set.
+
+  Each query MUST be self-contained: a real user types it cold, with no
+  passage in front of them. The query must not reference "the passage",
+  "the document", "this text", "the regulation mentioned", etc. — at
+  inference there is no passage to refer to.
+
+  Output strict JSON: {"queries": [{"style": "...", "text": "..."}, ...]}
+
+user: |
+  Passage:
+  ---
+  {chunk_text}
+  ---
+
+  Generate exactly {num_queries} diverse search queries that this passage
+  answers. Use the following styles, one query per style (in this order):
+  {style_list}
+
+  Rules:
+  - Each query must stand on its own. Imagine typing it into a search box
+    with no other context — the words in the query alone must point to
+    THIS passage and not to a generic class of documents.
+  - Forbidden phrases (any language): "the passage", "the document",
+    "this text", "this doc", "the regulation mentioned", "in the passage",
+    "according to the text", "il documento", "il presente regolamento"
+    (when used reflexively), and any equivalent reflexive reference.
+  - The query MUST contain at least one specific entity, identifier, date,
+    article number, or domain term drawn from (or directly implied by) the
+    passage. Generic topical queries are not allowed.
+  - Do NOT copy long phrases verbatim from the passage (>5 consecutive words).
+  - Keep queries under 25 words.
+  - Output ONLY the JSON object, no commentary.
+
+styles:
+  natural_question: "A natural-language question a user would type or speak. Must name a specific entity or identifier from the passage."
+  keyword_query: "A 2-5 word keyword query, like a search-engine query. Must include a specific term or identifier from the passage, not a generic topic word."
+  paraphrased_statement: "A declarative statement paraphrasing the passage's main claim. Must include a specific entity, identifier, or distinctive term from the passage."
