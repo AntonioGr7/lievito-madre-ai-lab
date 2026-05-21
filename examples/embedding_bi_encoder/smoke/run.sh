@@ -3,21 +3,22 @@
 # Builds a 100-row synthetic dataset, trains for 1 epoch, then verifies
 # the saved model loads and produces sensible embeddings.
 #
-# Run from the repo root:
-#   bash scripts/embedding_bi_encoder/smoke_test.sh
+# Run from anywhere (script cd's to repo root):
+#   bash examples/embedding_bi_encoder/smoke/run.sh
 #
 # Total runtime: ~1-2 min on CPU, ~30s on a recent GPU.
 
 set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")/../../.."
 
 DATA_DIR="data/processed/smoke-bi-encoder"
 OUT_DIR="outputs/smoke_bi_encoder_r1/final"
-CONFIG="configs/embedding/bi_encoder/smoke/smoke_r1.yaml"
+CONFIG="examples/embedding_bi_encoder/smoke/configs/smoke_r1.yaml"
 
 echo "============================================================"
 echo "Step 1/3  Build the synthetic dataset"
 echo "============================================================"
-python examples/embedding_bi_encoder/prepare_smoke.py \
+python examples/embedding_bi_encoder/smoke/prepare_smoke.py \
     --out-dir "$DATA_DIR" \
     --n-train 100 \
     --n-val 24 \
@@ -36,7 +37,7 @@ echo "============================================================"
 python -c "
 import sys
 from pathlib import Path
-from lievito_madre_ai_lab.embedding.bi_encoder.serve import BiEncoderPredictor
+from lievito_madre_ai_lab.finetuning.embedding.bi_encoder.serve import BiEncoderPredictor
 
 out_dir = '$OUT_DIR'
 if not Path(out_dir).exists():

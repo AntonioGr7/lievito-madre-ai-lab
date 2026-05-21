@@ -4,7 +4,7 @@
 Usage
 -----
 python scripts/gliner_entity_extraction/train_gliner.py \\
-    --config configs/encoder/gliner_entity_extraction/pii_gliner.yaml
+    --config examples/gliner_entity_extraction/pii/configs/pii_gliner.yaml
 
 # Resume from the latest checkpoint after a crash
 python scripts/gliner_entity_extraction/train_gliner.py --config ... --resume

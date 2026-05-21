@@ -9,11 +9,11 @@ Fine-tuning encoder models for token-level tasks like NER and PII detection. Lab
 #    Two prep scripts ship with this repo:
 #      - prepare_openpii.py    (ai4privacy/open-pii-masking-500k-ai4privacy)
 #      - prepare_nemotron_pii.py (nvidia/Nemotron-PII)
-python examples/token_classification/prepare_openpii.py
+python examples/token_classification/pii/prepare_openpii.py
 
 # 2. Train
 python scripts/token_classification/train_token_classification.py \
-    --config configs/encoder/token_classification/pii_mbert.yaml
+    --config examples/token_classification/pii/configs/pii_mbert.yaml
 ```
 
 The default dataset is `ai4privacy/open-pii-masking-500k-ai4privacy` (8 languages, 19 PII entity types). The default model is `microsoft/mdeberta-v3-base` (despite the `pii_mbert.yaml` filename, which is historical).
@@ -25,7 +25,7 @@ Final test metrics are saved to `outputs/<run>/final/test_metrics.json`.
 A 2048-token document tokenized with `max_length=512` would lose three-quarters of its supervision to plain truncation. The prepare scripts use **HuggingFace's overflow tokenization with stride** instead: long inputs are split into overlapping `max_length`-token chunks, each becoming its own training row.
 
 ```bash
-python examples/token_classification/prepare_nemotron_pii.py \
+python examples/token_classification/pii/prepare_nemotron_pii.py \
     --max-length 512 \
     --stride 128         # 128 = default; -1 disables (legacy truncate-only behaviour)
 ```
@@ -84,7 +84,7 @@ Pass `--resume` to continue from the latest checkpoint automatically:
 
 ```bash
 python scripts/token_classification/train_token_classification.py \
-    --config configs/encoder/token_classification/pii_mbert.yaml \
+    --config examples/token_classification/pii/configs/pii_mbert.yaml \
     --resume
 ```
 
@@ -92,7 +92,7 @@ Or point at a specific checkpoint:
 
 ```bash
 python scripts/token_classification/train_token_classification.py \
-    --config configs/encoder/token_classification/pii_mbert.yaml \
+    --config examples/token_classification/pii/configs/pii_mbert.yaml \
     --resume outputs/pii_mbert/checkpoint-5000
 ```
 
@@ -101,7 +101,7 @@ python scripts/token_classification/train_token_classification.py \
 Load the trained model for high-performance NER inference. The predictor decodes BIO predictions into entity spans with character offsets back into the original text:
 
 ```python
-from lievito_madre_ai_lab.encoder.token_classification.serve import TokenClassificationPredictor
+from lievito_madre_ai_lab.finetuning.encoder.token_classification.serve import TokenClassificationPredictor
 
 predictor = TokenClassificationPredictor("outputs/pii_mbert/final")
 
@@ -122,14 +122,14 @@ spans = predictor.predict_one("Email me at jane@example.com.")
 Run from the CLI:
 
 ```bash
-python -m lievito_madre_ai_lab.encoder.token_classification.serve \
+python -m lievito_madre_ai_lab.finetuning.encoder.token_classification.serve \
     outputs/pii_mbert/final "Send it to John Doe at john@example.com."
 ```
 
 Benchmark throughput:
 
 ```bash
-python -m lievito_madre_ai_lab.encoder.token_classification.serve \
+python -m lievito_madre_ai_lab.finetuning.encoder.token_classification.serve \
     outputs/pii_mbert/final --benchmark
 ```
 
@@ -140,13 +140,13 @@ The same hardware-aware optimisation stack as text classification applies (FP16/
 Duplicate the YAML config and edit `model_name`, `processed_dir`, and `output_dir`:
 
 ```bash
-cp configs/encoder/token_classification/pii_mbert.yaml \
-   configs/encoder/token_classification/ner_xlmr.yaml
+cp examples/token_classification/pii/configs/pii_mbert.yaml \
+   examples/token_classification/pii/configs/ner_xlmr.yaml
 ```
 
 For multilingual NER, `microsoft/mdeberta-v3-base` (the current default) and `xlm-roberta-base` are stronger backbones than mBERT. For long documents, `answerdotai/ModernBERT-base` supports up to 8192 tokens — see [Switching to a longer-context model](#switching-to-a-longer-context-model-eg-modernbert) above.
 
-Then run with `--config configs/encoder/token_classification/ner_xlmr.yaml`.
+Then run with `--config examples/token_classification/pii/configs/ner_xlmr.yaml`.
 
 ## Bringing your own data
 
@@ -170,7 +170,7 @@ Use `tokenize_for_trainer` to tokenize and align labels to subwords:
 
 ```python
 from datasets import DatasetDict, Dataset
-from lievito_madre_ai_lab.encoder.token_classification.dataset import tokenize_for_trainer
+from lievito_madre_ai_lab.finetuning.encoder.token_classification.dataset import tokenize_for_trainer
 
 raw = DatasetDict({
     "train": Dataset.from_dict({"source_text": [...], "privacy_mask": [...]}),
@@ -180,7 +180,7 @@ raw = DatasetDict({
 processed = tokenize_for_trainer(raw, model_name="microsoft/mdeberta-v3-base")
 processed.save_to_disk("data/processed/my_ner_dataset")
 # Don't forget to write the sidecar so train/serve can rediscover the settings:
-from lievito_madre_ai_lab.encoder.token_classification.dataset import save_preprocessing_meta
+from lievito_madre_ai_lab.finetuning.encoder.token_classification.dataset import save_preprocessing_meta
 save_preprocessing_meta(
     "data/processed/my_ner_dataset",
     tokenizer="microsoft/mdeberta-v3-base",

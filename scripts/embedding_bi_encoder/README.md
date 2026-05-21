@@ -32,7 +32,7 @@ Stack the recipes. The full SOTA setup is **6 → 3 → 4 → 5 (+ 8)**, end-to-
 **Before you start**, sanity-check the install with the smoke test — builds a synthetic 100-row dataset, runs Recipe 1 end-to-end in ~2 minutes, and verifies the saved model can tell a paraphrase from an unrelated sentence:
 
 ```bash
-bash scripts/embedding_bi_encoder/smoke_test.sh
+bash examples/embedding_bi_encoder/smoke/run.sh
 ```
 
 If that passes, the pipeline is wired correctly and you can move to the recipes below with real data.
@@ -40,12 +40,12 @@ If that passes, the pipeline is wired correctly and you can move to the recipes 
 To smoke-test every recipe end-to-end (mining + scoring side-stages + train + recipe-specific assertion for all 8), use the full driver. First run downloads ~150 MB of HF models for mining/scoring; after that each recipe is ~1–2 min on CPU.
 
 ```bash
-bash scripts/embedding_bi_encoder/smoke_test_all.sh           # all 8 recipes
-bash scripts/embedding_bi_encoder/smoke_test_all.sh 3         # just Recipe 3
-bash scripts/embedding_bi_encoder/smoke_test_all.sh 4 5 8     # a subset
+bash examples/embedding_bi_encoder/smoke/run_all.sh           # all 8 recipes
+bash examples/embedding_bi_encoder/smoke/run_all.sh 3         # just Recipe 3
+bash examples/embedding_bi_encoder/smoke/run_all.sh 4 5 8     # a subset
 ```
 
-Each recipe ships its own complete smoke YAML at [configs/embedding/bi_encoder/smoke/smoke_r&lt;N&gt;.yaml](../../configs/embedding/bi_encoder/smoke/) — these double as the minimal working template for adapting Recipe N to your real data.
+Each recipe ships its own complete smoke YAML at [examples/embedding_bi_encoder/smoke/configs/smoke_r&lt;N&gt;.yaml](../../configs/embedding/bi_encoder/smoke/) — these double as the minimal working template for adapting Recipe N to your real data.
 
 ---
 
@@ -240,7 +240,7 @@ python scripts/embedding_bi_encoder/train_bi_encoder.py \
     --config configs/embedding/bi_encoder/<your_recipe5>.yaml
 ```
 
-The stage-2 YAML differs from stage 1 in four places (see [`smoke_r5.yaml`](../../configs/embedding/bi_encoder/smoke/smoke_r5.yaml) for the full template):
+The stage-2 YAML differs from stage 1 in four places (see [`smoke_r5.yaml`](../../examples/embedding_bi_encoder/smoke/configs/smoke_r5.yaml) for the full template):
 
 ```yaml
 model_name: outputs/<stage1_run>/final          # continue from stage 1
@@ -558,7 +558,7 @@ python scripts/embedding_bi_encoder/train_bi_encoder.py --config <…>.yaml \
 ### Inference
 
 ```python
-from lievito_madre_ai_lab.embedding.bi_encoder.serve import BiEncoderPredictor
+from lievito_madre_ai_lab.finetuning.embedding.bi_encoder.serve import BiEncoderPredictor
 
 predictor = BiEncoderPredictor("outputs/<run>/final")
 
@@ -587,13 +587,13 @@ hits = predictor.search(
 CLI:
 
 ```bash
-python -m lievito_madre_ai_lab.embedding.bi_encoder.serve outputs/<run>/final \
+python -m lievito_madre_ai_lab.finetuning.embedding.bi_encoder.serve outputs/<run>/final \
     "semantic search" --prompt-name query --truncate-dim 64
 
-python -m lievito_madre_ai_lab.embedding.bi_encoder.serve outputs/<run>/final \
+python -m lievito_madre_ai_lab.finetuning.embedding.bi_encoder.serve outputs/<run>/final \
     "edge text" --truncate-layers 6 --truncate-dim 128
 
-python -m lievito_madre_ai_lab.embedding.bi_encoder.serve outputs/<run>/final --benchmark
+python -m lievito_madre_ai_lab.finetuning.embedding.bi_encoder.serve outputs/<run>/final --benchmark
 ```
 
 Hardware-aware automation:
@@ -608,7 +608,7 @@ Hardware-aware automation:
 
 ```python
 from datasets import Dataset, DatasetDict
-from lievito_madre_ai_lab.embedding.bi_encoder.dataset import (
+from lievito_madre_ai_lab.finetuning.embedding.bi_encoder.dataset import (
     save_preprocessing_meta,
     validate_dataset,
 )

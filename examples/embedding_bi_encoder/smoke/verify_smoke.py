@@ -9,7 +9,7 @@ training run.
 
 Usage
 -----
-python examples/embedding_bi_encoder/verify_smoke.py \\
+python examples/embedding_bi_encoder/smoke/verify_smoke.py \\
     --recipe 4 \\
     --model-dir outputs/smoke_bi_encoder_r4/final \\
     --processed-dir data/processed/smoke-bi-encoder

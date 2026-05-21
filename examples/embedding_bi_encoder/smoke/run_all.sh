@@ -5,16 +5,17 @@
 # needed by Recipes 2/3/6/7, trains a model for each recipe (1 epoch,
 # batch 4), and verifies the saved artifact behaves as the recipe promises.
 #
-# Run from the repo root:
-#   bash scripts/embedding_bi_encoder/smoke_test_all.sh           # all 8
-#   bash scripts/embedding_bi_encoder/smoke_test_all.sh 3         # just Recipe 3
-#   bash scripts/embedding_bi_encoder/smoke_test_all.sh 2 3 6 7   # subset
+# Run from anywhere (script cd's to repo root):
+#   bash examples/embedding_bi_encoder/smoke/run_all.sh           # all 8
+#   bash examples/embedding_bi_encoder/smoke/run_all.sh 3         # just Recipe 3
+#   bash examples/embedding_bi_encoder/smoke/run_all.sh 2 3 6 7   # subset
 #
 # Heads up — first run downloads ~150 MB of HF models for mining + scoring
 # (a small retriever + a tiny cross-encoder). After that the smoke is
 # ~1-2 min per recipe on CPU.
 
 set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")/../../.."
 
 # ── Paths ───────────────────────────────────────────────────────────────────
 PAIR_DIR="data/processed/smoke-bi-encoder"
@@ -23,7 +24,7 @@ MINED_ENSEMBLE_DIR="data/processed/smoke-mined-ensemble"
 DISTILL_DIR="data/processed/smoke-distill"
 SILVER_DIR="data/processed/smoke-silver"
 
-CONFIG_DIR="configs/embedding/bi_encoder/smoke"
+CONFIG_DIR="examples/embedding_bi_encoder/smoke/configs"
 OUT_BASE="outputs"
 
 # ── Models used by the mining + scoring side-stages ─────────────────────────
@@ -46,7 +47,7 @@ prepare_pair_dataset() {
         return
     fi
     banner "Prep │ build synthetic (anchor, positive) pairs"
-    python examples/embedding_bi_encoder/prepare_smoke.py \
+    python examples/embedding_bi_encoder/smoke/prepare_smoke.py \
         --out-dir "$PAIR_DIR" \
         --n-train 100 --n-val 24 --n-test 24
 }
@@ -128,7 +129,7 @@ train_and_verify() {
     python scripts/embedding_bi_encoder/train_bi_encoder.py --config "$config"
 
     banner "Recipe ${n} │ verify"
-    python examples/embedding_bi_encoder/verify_smoke.py \
+    python examples/embedding_bi_encoder/smoke/verify_smoke.py \
         --recipe "$n" \
         --model-dir "$out_final" \
         --processed-dir "$processed_dir"

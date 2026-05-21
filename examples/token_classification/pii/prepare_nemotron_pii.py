@@ -25,19 +25,19 @@ Full label set (~55 categories):
 Usage examples
 --------------
 # Full dataset, mdeberta tokenizer
-python examples/token_classification/prepare_nemotron_pii.py \
+python examples/token_classification/pii/prepare_nemotron_pii.py \
     --out-dir data/processed/nemotron-pii
 
 # Quick smoke-test on 2 000 rows
-python examples/token_classification/prepare_nemotron_pii.py \
+python examples/token_classification/pii/prepare_nemotron_pii.py \
     --out-dir data/processed/nemotron-pii-smoke --limit 2000
 
 # US locale only
-python examples/token_classification/prepare_nemotron_pii.py \
+python examples/token_classification/pii/prepare_nemotron_pii.py \
     --out-dir data/processed/nemotron-pii-us --locale us
 
 # Different tokenizer
-python examples/token_classification/prepare_nemotron_pii.py \
+python examples/token_classification/pii/prepare_nemotron_pii.py \
     --out-dir data/processed/nemotron-pii --model bert-base-cased
 """
 

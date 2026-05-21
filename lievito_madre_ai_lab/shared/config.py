@@ -12,7 +12,7 @@ class TrainConfig:
     """Hyperparameters and paths for an encoder fine-tuning run.
 
     Load from YAML:
-        cfg = load_config("configs/encoder/text_classification/emotion_bert.yaml")
+        cfg = load_config("examples/text_classification/emotion/configs/emotion_bert.yaml")
 
     All fields map 1-to-1 to TrainingArguments / DataCollator / from_pretrained
     so the trainer can be built without any extra translation logic.

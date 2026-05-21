@@ -15,19 +15,19 @@ Steps
 Usage examples
 --------------
 # Default: dair-ai/emotion from HF Hub, answerdotai/ModernBERT-base tokenizer
-python examples/text_classification/prepare_emotion.py
+python examples/text_classification/emotion/prepare_emotion.py
 
 # Different dataset
-python examples/text_classification/prepare_emotion.py --dataset-id cardiffnlp/tweet_eval --dataset-config sentiment
+python examples/text_classification/emotion/prepare_emotion.py --dataset-id cardiffnlp/tweet_eval --dataset-config sentiment
 
 # Use a local snapshot already on disk
-python examples/text_classification/prepare_emotion.py --source local --local-path data/raw/emotion
+python examples/text_classification/emotion/prepare_emotion.py --source local --local-path data/raw/emotion
 
 # Download from a shared Google Drive folder (Arrow format)
-python examples/text_classification/prepare_emotion.py --source drive --drive-id <FILE_ID> --drive-dest data/raw/emotion --drive-folder
+python examples/text_classification/emotion/prepare_emotion.py --source drive --drive-id <FILE_ID> --drive-dest data/raw/emotion --drive-folder
 
 # Change tokenizer and max sequence length
-python examples/text_classification/prepare_emotion.py --model roberta-base --max-length 64
+python examples/text_classification/emotion/prepare_emotion.py --model roberta-base --max-length 64
 """
 
 import argparse

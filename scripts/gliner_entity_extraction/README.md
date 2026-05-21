@@ -40,18 +40,18 @@ Every row in every split has the same shape — char-offset spans, half-open `[s
 - `train` + `validation`: keep only spans whose label is in `train_types`. Held-out spans are **dropped**, not relabeled — GLiNER must see no signal on held-out types during training.
 - `test`: keep all spans. Eval-time label-set filtering produces the closed-set and zero-shot views.
 
-`examples/gliner_entity_extraction/prepare_openpii.py` is the worked example targeting OpenPII. Use it as a template.
+`examples/gliner_entity_extraction/pii/prepare_openpii.py` is the worked example targeting OpenPII. Use it as a template.
 
 ## Quickstart (OpenPII reference)
 
 ```bash
 # 1. Build the char-offset dataset from the ai4privacy OpenPII corpus
-python examples/gliner_entity_extraction/prepare_openpii.py \
+python examples/gliner_entity_extraction/pii/prepare_openpii.py \
     --out-dir data/processed/pii-gliner
 
 # 2. Train
 python scripts/gliner_entity_extraction/train_gliner.py \
-    --config configs/encoder/gliner_entity_extraction/pii_gliner.yaml
+    --config examples/gliner_entity_extraction/pii/configs/pii_gliner.yaml
 ```
 
 Holdout types default to `PASSPORTNUM DRIVERLICENSENUM AGE` (overridable via `--holdout-types`). Final test metrics land in `outputs/<run>/final/test_metrics.json` with two prefixed sections:
@@ -135,13 +135,13 @@ Two guards run before any GPU work (same as the other pipelines):
 
 ## Bringing your own data
 
-Copy `examples/gliner_entity_extraction/prepare_openpii.py` as a starting point and adapt it to your corpus. The simplest pattern:
+Copy `examples/gliner_entity_extraction/pii/prepare_openpii.py` as a starting point and adapt it to your corpus. The simplest pattern:
 
 ```python
 import json
 from pathlib import Path
 from datasets import Dataset, DatasetDict
-from lievito_madre_ai_lab.encoder.gliner_entity_extraction.dataset import (
+from lievito_madre_ai_lab.finetuning.encoder.gliner_entity_extraction.dataset import (
     collect_entity_types, partition_entity_types, validate_row,
 )
 
@@ -208,7 +208,7 @@ The YAML's `gliner.peft.enabled` switch picks between the two. Choose based on m
 LoRA wraps the encoder with low-rank adapters and freezes the original encoder weights; the span scoring head stays fully trainable. On `knowledgator/gliner-multitask-large-v0.5` (~660M params), LoRA cuts the trainable parameter count by ~99% and fits comfortably on a 16GB T4 with batch 8 + grad-checkpointing.
 
 ```yaml
-# configs/encoder/gliner_entity_extraction/<your>.yaml
+# examples/gliner_entity_extraction/pii/configs/<your>.yaml
 model_name: knowledgator/gliner-multitask-large-v0.5
 per_device_train_batch_size: 8
 gradient_accumulation_steps: 2          # effective batch = 16
@@ -293,11 +293,11 @@ Loss + negative sampling fields go onto `model.config` via `load_gliner` (consum
 ```bash
 # Auto-detect the latest checkpoint
 python scripts/gliner_entity_extraction/train_gliner.py \
-    --config configs/encoder/gliner_entity_extraction/pii_gliner.yaml --resume
+    --config examples/gliner_entity_extraction/pii/configs/pii_gliner.yaml --resume
 
 # Or point at a specific checkpoint
 python scripts/gliner_entity_extraction/train_gliner.py \
-    --config configs/encoder/gliner_entity_extraction/pii_gliner.yaml \
+    --config examples/gliner_entity_extraction/pii/configs/pii_gliner.yaml \
     --resume outputs/pii_gliner/gliner_exp_01/checkpoint-500
 ```
 
@@ -305,7 +305,7 @@ Smoke-test on a small slice before committing to a full run:
 
 ```bash
 python scripts/gliner_entity_extraction/train_gliner.py \
-    --config configs/encoder/gliner_entity_extraction/pii_gliner.yaml \
+    --config examples/gliner_entity_extraction/pii/configs/pii_gliner.yaml \
     --max-train-samples 200 --max-eval-samples 100 --max-test-samples 100
 ```
 
@@ -314,7 +314,7 @@ python scripts/gliner_entity_extraction/train_gliner.py \
 [`GLiNERPredictor`](../../lievito_madre_ai_lab/encoder/gliner_entity_extraction/serve.py) is the single inference entrypoint. It loads a full-FT save and a LoRA save through the same constructor, and applies the right optimisation stack for the detected hardware.
 
 ```python
-from lievito_madre_ai_lab.encoder.gliner_entity_extraction.serve import GLiNERPredictor
+from lievito_madre_ai_lab.finetuning.encoder.gliner_entity_extraction.serve import GLiNERPredictor
 
 predictor = GLiNERPredictor("outputs/pii_gliner/gliner_exp_01/final")
 
@@ -364,12 +364,12 @@ predictor = GLiNERPredictor(
 ### CLI
 
 ```bash
-python -m lievito_madre_ai_lab.encoder.gliner_entity_extraction.serve \
+python -m lievito_madre_ai_lab.finetuning.encoder.gliner_entity_extraction.serve \
     outputs/pii_gliner/gliner_exp_01/final \
     "Send it to Maria Rossi at maria.rossi@example.com."
 
 # Open-vocabulary
-python -m lievito_madre_ai_lab.encoder.gliner_entity_extraction.serve \
+python -m lievito_madre_ai_lab.finetuning.encoder.gliner_entity_extraction.serve \
     outputs/pii_gliner/gliner_exp_01/final \
     "Driver license #ABC123 expired" \
     --labels "driver license number" "expiry date"

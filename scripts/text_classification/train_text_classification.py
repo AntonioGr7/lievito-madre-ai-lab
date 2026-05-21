@@ -4,7 +4,7 @@
 Usage
 -----
 python scripts/train_text_classification.py \
-    --config configs/encoder/text_classification/emotion_bert.yaml
+    --config examples/text_classification/emotion/configs/emotion_bert.yaml
 """
 
 import argparse

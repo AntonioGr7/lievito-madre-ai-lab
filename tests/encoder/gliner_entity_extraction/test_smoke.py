@@ -22,7 +22,7 @@ pytestmark = pytest.mark.skipif(
 
 def test_train_gliner_end_to_end(tmp_path):
     repo_root = Path(__file__).resolve().parents[3]
-    config = repo_root / "configs/encoder/gliner_entity_extraction/smoke.yaml"
+    config = repo_root / "examples/gliner_entity_extraction/pii/configs/smoke.yaml"
     cwd = tmp_path
 
     # The processed_dir in the YAML is relative; the test must run from a

@@ -6,11 +6,11 @@ Fine-tuning encoder models for sequence classification.
 
 ```bash
 # 1. Prepare the dataset (downloads, tokenizes, saves to Arrow)
-python examples/text_classification/prepare_emotion.py
+python examples/text_classification/emotion/prepare_emotion.py
 
 # 2. Train
 python scripts/text_classification/train_text_classification.py \
-    --config configs/encoder/text_classification/emotion_bert.yaml
+    --config examples/text_classification/emotion/configs/emotion_bert.yaml
 ```
 
 The default dataset is `dair-ai/emotion` (6 emotion classes). The default model is `answerdotai/ModernBERT-base`.
@@ -55,7 +55,7 @@ Pass `--resume` to continue from the latest checkpoint automatically:
 
 ```bash
 python scripts/text_classification/train_text_classification.py \
-    --config configs/encoder/text_classification/emotion_bert.yaml \
+    --config examples/text_classification/emotion/configs/emotion_bert.yaml \
     --resume
 ```
 
@@ -63,7 +63,7 @@ Or point at a specific checkpoint:
 
 ```bash
 python scripts/text_classification/train_text_classification.py \
-    --config configs/encoder/text_classification/emotion_bert.yaml \
+    --config examples/text_classification/emotion/configs/emotion_bert.yaml \
     --resume outputs/emotion_bert/checkpoint-1000
 ```
 
@@ -72,7 +72,7 @@ python scripts/text_classification/train_text_classification.py \
 Load the trained model for high-performance inference:
 
 ```python
-from lievito_madre_ai_lab.encoder.text_classification.serve import TextClassificationPredictor
+from lievito_madre_ai_lab.finetuning.encoder.text_classification.serve import TextClassificationPredictor
 
 predictor = TextClassificationPredictor("outputs/emotion_bert/final")
 
@@ -87,14 +87,14 @@ result = predictor.predict_one("What a lovely day.")
 Run from the CLI:
 
 ```bash
-python -m lievito_madre_ai_lab.encoder.text_classification.serve \
+python -m lievito_madre_ai_lab.finetuning.encoder.text_classification.serve \
     outputs/emotion_bert/final "I love this" "I'm so angry"
 ```
 
 Benchmark throughput:
 
 ```bash
-python -m lievito_madre_ai_lab.encoder.text_classification.serve \
+python -m lievito_madre_ai_lab.finetuning.encoder.text_classification.serve \
     outputs/emotion_bert/final --benchmark
 ```
 
@@ -111,11 +111,11 @@ The predictor automatically applies the best available optimisations for the det
 Duplicate the YAML config and edit `model_name`, `processed_dir`, and `output_dir`:
 
 ```bash
-cp configs/encoder/text_classification/emotion_bert.yaml \
-   configs/encoder/text_classification/emotion_roberta.yaml
+cp examples/text_classification/emotion/configs/emotion_bert.yaml \
+   examples/text_classification/emotion/configs/emotion_roberta.yaml
 ```
 
-Then run with `--config configs/encoder/text_classification/emotion_roberta.yaml`.
+Then run with `--config examples/text_classification/emotion/configs/emotion_roberta.yaml`.
 
 ## Bringing your own data
 
@@ -123,7 +123,7 @@ The training script only requires a tokenized Arrow dataset with three columns: 
 
 **Path 1 — your files already have `text` and `label` columns** (CSV, JSON, or Parquet):
 
-Copy `examples/text_classification/prepare_emotion.py`, point it at your data, and run it:
+Copy `examples/text_classification/emotion/prepare_emotion.py`, point it at your data, and run it:
 
 ```bash
 python my_prepare_script.py \
@@ -138,7 +138,7 @@ Write a script that produces a `DatasetDict` and calls `tokenize_for_trainer`:
 
 ```python
 from datasets import DatasetDict, Dataset
-from lievito_madre_ai_lab.encoder.text_classification.dataset import tokenize_for_trainer
+from lievito_madre_ai_lab.finetuning.encoder.text_classification.dataset import tokenize_for_trainer
 
 raw = DatasetDict({
     "train": Dataset.from_dict({"text": [...], "label": [...]}),
@@ -149,7 +149,7 @@ processed = tokenize_for_trainer(raw, model_name="bert-base-uncased")
 processed.save_to_disk("data/processed/my_dataset")
 
 # Write the sidecar so train/serve can rediscover the settings.
-from lievito_madre_ai_lab.encoder.text_classification.dataset import save_preprocessing_meta
+from lievito_madre_ai_lab.finetuning.encoder.text_classification.dataset import save_preprocessing_meta
 save_preprocessing_meta(
     "data/processed/my_dataset",
     tokenizer="bert-base-uncased",

@@ -4,20 +4,20 @@
 Usage
 -----
 python scripts/token_classification/train_token_classification.py \\
-    --config configs/encoder/token_classification/pii_mbert.yaml
+    --config examples/token_classification/pii/configs/pii_mbert.yaml
 
 # Resume from the latest checkpoint after a crash
 python scripts/token_classification/train_token_classification.py \\
-    --config configs/encoder/token_classification/pii_mbert.yaml --resume
+    --config examples/token_classification/pii/configs/pii_mbert.yaml --resume
 
 # Resume from a specific checkpoint
 python scripts/token_classification/train_token_classification.py \\
-    --config configs/encoder/token_classification/pii_mbert.yaml \\
+    --config examples/token_classification/pii/configs/pii_mbert.yaml \\
     --resume outputs/pii_mbert/checkpoint-5000
 
 # Smoke test on a small slice (laptop-friendly)
 python scripts/token_classification/train_token_classification.py \\
-    --config configs/encoder/token_classification/pii_mbert.yaml \\
+    --config examples/token_classification/pii/configs/pii_mbert.yaml \\
     --max-train-samples 200 --max-eval-samples 100 --max-test-samples 100
 """
 
