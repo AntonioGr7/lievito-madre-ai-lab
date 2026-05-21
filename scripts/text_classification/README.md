@@ -6,7 +6,7 @@ Fine-tuning encoder models for sequence classification.
 
 ```bash
 # 1. Prepare the dataset (downloads, tokenizes, saves to Arrow)
-python examples/text_classification/emotion/prepare_emotion.py
+python examples/text_classification/emotion/dataset/prepare_emotion.py
 
 # 2. Train
 python scripts/text_classification/train_text_classification.py \
@@ -123,7 +123,7 @@ The training script only requires a tokenized Arrow dataset with three columns: 
 
 **Path 1 — your files already have `text` and `label` columns** (CSV, JSON, or Parquet):
 
-Copy `examples/text_classification/emotion/prepare_emotion.py`, point it at your data, and run it:
+Copy `examples/text_classification/emotion/dataset/prepare_emotion.py`, point it at your data, and run it:
 
 ```bash
 python my_prepare_script.py \

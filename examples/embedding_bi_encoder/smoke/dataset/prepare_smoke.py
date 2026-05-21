@@ -10,7 +10,7 @@ decrease over 1 epoch on this).
 
 Usage
 -----
-python examples/embedding_bi_encoder/smoke/prepare_smoke.py
+python examples/embedding_bi_encoder/smoke/dataset/prepare_smoke.py
 # writes:
 #   data/processed/smoke-bi-encoder/{train,validation,test}/...
 #   data/processed/smoke-bi-encoder/preprocessing.json

@@ -14,7 +14,7 @@ CONFIG="examples/gliner_entity_extraction/pii/configs/pii_gliner.yaml"
 echo "============================================================"
 echo "Step 1/2  Build the char-offset dataset from OpenPII"
 echo "============================================================"
-python examples/gliner_entity_extraction/pii/prepare_openpii.py \
+python examples/gliner_entity_extraction/pii/dataset/prepare_openpii.py \
     --out-dir data/processed/pii-gliner
 
 echo

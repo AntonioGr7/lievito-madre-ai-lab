@@ -40,13 +40,13 @@ Every row in every split has the same shape — char-offset spans, half-open `[s
 - `train` + `validation`: keep only spans whose label is in `train_types`. Held-out spans are **dropped**, not relabeled — GLiNER must see no signal on held-out types during training.
 - `test`: keep all spans. Eval-time label-set filtering produces the closed-set and zero-shot views.
 
-`examples/gliner_entity_extraction/pii/prepare_openpii.py` is the worked example targeting OpenPII. Use it as a template.
+`examples/gliner_entity_extraction/pii/dataset/prepare_openpii.py` is the worked example targeting OpenPII. Use it as a template.
 
 ## Quickstart (OpenPII reference)
 
 ```bash
 # 1. Build the char-offset dataset from the ai4privacy OpenPII corpus
-python examples/gliner_entity_extraction/pii/prepare_openpii.py \
+python examples/gliner_entity_extraction/pii/dataset/prepare_openpii.py \
     --out-dir data/processed/pii-gliner
 
 # 2. Train
@@ -135,7 +135,7 @@ Two guards run before any GPU work (same as the other pipelines):
 
 ## Bringing your own data
 
-Copy `examples/gliner_entity_extraction/pii/prepare_openpii.py` as a starting point and adapt it to your corpus. The simplest pattern:
+Copy `examples/gliner_entity_extraction/pii/dataset/prepare_openpii.py` as a starting point and adapt it to your corpus. The simplest pattern:
 
 ```python
 import json

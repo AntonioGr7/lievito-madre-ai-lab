@@ -13,7 +13,7 @@ bash examples/text_classification/emotion/run.sh
 Or step by step:
 
 ```bash
-python examples/text_classification/emotion/prepare_emotion.py
+python examples/text_classification/emotion/dataset/prepare_emotion.py
 python scripts/text_classification/train_text_classification.py \
     --config examples/text_classification/emotion/configs/emotion_bert.yaml
 ```

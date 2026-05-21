@@ -21,9 +21,9 @@ Or step by step:
 
 ```bash
 # Pick one prep script:
-python examples/gliner_entity_extraction/pii/prepare_openpii.py --out-dir data/processed/pii-gliner
+python examples/gliner_entity_extraction/pii/dataset/prepare_openpii.py --out-dir data/processed/pii-gliner
 # or:
-python examples/gliner_entity_extraction/pii/prepare_nemotron.py --out-dir data/processed/pii-gliner
+python examples/gliner_entity_extraction/pii/dataset/prepare_nemotron.py --out-dir data/processed/pii-gliner
 
 python scripts/gliner_entity_extraction/train_gliner.py \
     --config examples/gliner_entity_extraction/pii/configs/pii_gliner.yaml

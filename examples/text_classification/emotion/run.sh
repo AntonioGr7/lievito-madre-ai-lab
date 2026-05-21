@@ -12,7 +12,7 @@ CONFIG="examples/text_classification/emotion/configs/emotion_bert.yaml"
 echo "============================================================"
 echo "Step 1/2  Prepare dataset (downloads, tokenizes, saves to Arrow)"
 echo "============================================================"
-python examples/text_classification/emotion/prepare_emotion.py
+python examples/text_classification/emotion/dataset/prepare_emotion.py
 
 echo
 echo "============================================================"

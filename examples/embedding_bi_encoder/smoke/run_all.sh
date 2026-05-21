@@ -47,7 +47,7 @@ prepare_pair_dataset() {
         return
     fi
     banner "Prep │ build synthetic (anchor, positive) pairs"
-    python examples/embedding_bi_encoder/smoke/prepare_smoke.py \
+    python examples/embedding_bi_encoder/smoke/dataset/prepare_smoke.py \
         --out-dir "$PAIR_DIR" \
         --n-train 100 --n-val 24 --n-test 24
 }

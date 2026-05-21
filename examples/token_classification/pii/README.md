@@ -17,9 +17,9 @@ Or step by step:
 
 ```bash
 # Pick one prep script:
-python examples/token_classification/pii/prepare_openpii.py
+python examples/token_classification/pii/dataset/prepare_openpii.py
 # or:
-python examples/token_classification/pii/prepare_nemotron_pii.py
+python examples/token_classification/pii/dataset/prepare_nemotron_pii.py
 
 python scripts/token_classification/train_token_classification.py \
     --config examples/token_classification/pii/configs/pii_mbert.yaml

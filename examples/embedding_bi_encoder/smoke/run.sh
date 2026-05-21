@@ -18,7 +18,7 @@ CONFIG="examples/embedding_bi_encoder/smoke/configs/smoke_r1.yaml"
 echo "============================================================"
 echo "Step 1/3  Build the synthetic dataset"
 echo "============================================================"
-python examples/embedding_bi_encoder/smoke/prepare_smoke.py \
+python examples/embedding_bi_encoder/smoke/dataset/prepare_smoke.py \
     --out-dir "$DATA_DIR" \
     --n-train 100 \
     --n-val 24 \

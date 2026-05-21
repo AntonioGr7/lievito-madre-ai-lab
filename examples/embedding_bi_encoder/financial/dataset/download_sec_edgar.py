@@ -14,13 +14,13 @@ so the file can be plugged in directly via the YAML's `input_path` or the
 Examples
 --------
 # 1. Small sample for pipeline smoke-testing (default: 1000 docs).
-python examples/embedding_bi_encoder/financial/download_sec_edgar.py
+python examples/embedding_bi_encoder/financial/dataset/download_sec_edgar.py
 
 # 2. Full download — pass 0 (or a negative number) to lift the cap.
-python examples/embedding_bi_encoder/financial/download_sec_edgar.py --sample-size 0
+python examples/embedding_bi_encoder/financial/dataset/download_sec_edgar.py --sample-size 0
 
 # 3. Custom sample size + output path.
-python examples/embedding_bi_encoder/financial/download_sec_edgar.py \\
+python examples/embedding_bi_encoder/financial/dataset/download_sec_edgar.py \\
     --sample-size 5000 \\
     --out-path data/raw/sec-edgar-5k.jsonl
 """

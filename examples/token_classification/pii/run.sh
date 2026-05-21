@@ -14,7 +14,7 @@ CONFIG="examples/token_classification/pii/configs/pii_mbert.yaml"
 echo "============================================================"
 echo "Step 1/2  Prepare dataset (downloads, tokenizes, aligns BIO)"
 echo "============================================================"
-python examples/token_classification/pii/prepare_openpii.py
+python examples/token_classification/pii/dataset/prepare_openpii.py
 
 echo
 echo "============================================================"

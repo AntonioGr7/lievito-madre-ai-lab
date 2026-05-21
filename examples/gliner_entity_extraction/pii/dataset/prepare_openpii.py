@@ -19,7 +19,7 @@ Row schema in every split:
 
 Usage
 -----
-python examples/gliner_entity_extraction/pii/prepare_openpii.py \\
+python examples/gliner_entity_extraction/pii/dataset/prepare_openpii.py \\
     --out-dir data/processed/pii-gliner
 """
 import argparse

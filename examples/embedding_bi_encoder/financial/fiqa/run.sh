@@ -14,7 +14,7 @@ MODEL_DIR="outputs/bi_encoder_fiqa_ettin68m/exp_01/final"
 echo "============================================================"
 echo "Step 1/3  Build FiQA (anchor, positive) pairs from BeIR"
 echo "============================================================"
-python examples/embedding_bi_encoder/financial/fiqa/prepare_fiqa.py
+python examples/embedding_bi_encoder/financial/dataset/prepare_fiqa.py
 
 echo
 echo "============================================================"
@@ -26,4 +26,4 @@ echo
 echo "============================================================"
 echo "Step 3/3  Benchmark on RTEB-finance English open subset"
 echo "============================================================"
-python examples/embedding_bi_encoder/financial/eval_rteb_finance.py --model-dir "$MODEL_DIR"
+python examples/embedding_bi_encoder/financial/eval/eval_rteb_finance.py --model-dir "$MODEL_DIR"

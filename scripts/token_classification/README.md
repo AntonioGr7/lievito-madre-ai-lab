@@ -9,7 +9,7 @@ Fine-tuning encoder models for token-level tasks like NER and PII detection. Lab
 #    Two prep scripts ship with this repo:
 #      - prepare_openpii.py    (ai4privacy/open-pii-masking-500k-ai4privacy)
 #      - prepare_nemotron_pii.py (nvidia/Nemotron-PII)
-python examples/token_classification/pii/prepare_openpii.py
+python examples/token_classification/pii/dataset/prepare_openpii.py
 
 # 2. Train
 python scripts/token_classification/train_token_classification.py \
@@ -25,7 +25,7 @@ Final test metrics are saved to `outputs/<run>/final/test_metrics.json`.
 A 2048-token document tokenized with `max_length=512` would lose three-quarters of its supervision to plain truncation. The prepare scripts use **HuggingFace's overflow tokenization with stride** instead: long inputs are split into overlapping `max_length`-token chunks, each becoming its own training row.
 
 ```bash
-python examples/token_classification/pii/prepare_nemotron_pii.py \
+python examples/token_classification/pii/dataset/prepare_nemotron_pii.py \
     --max-length 512 \
     --stride 128         # 128 = default; -1 disables (legacy truncate-only behaviour)
 ```

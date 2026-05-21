@@ -1,6 +1,6 @@
 # Smoke-test config for Recipe 1 — Quick MNRL baseline (pair shape).
 # Exercises in-batch-negative MNRL + GradCache auto-swap end-to-end.
-# Pair with examples/embedding_bi_encoder/smoke/prepare_smoke.py and
+# Pair with examples/embedding_bi_encoder/smoke/dataset/prepare_smoke.py and
 # examples/embedding_bi_encoder/smoke/run.sh.
 # Worked example: this is the minimal complete config for Recipe 1.
 

@@ -26,7 +26,7 @@ Nemotron-PII quirks (vs OpenPII)
 
 Usage
 -----
-python examples/gliner_entity_extraction/pii/prepare_nemotron.py \\
+python examples/gliner_entity_extraction/pii/dataset/prepare_nemotron.py \\
     --out-dir data/processed/nemotron-gliner
 """
 import argparse

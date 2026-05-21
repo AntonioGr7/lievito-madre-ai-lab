@@ -15,22 +15,22 @@ Steps
 Usage examples
 --------------
 # Default: ai4privacy PII dataset from HF Hub, bert-base-multilingual-cased tokenizer
-python examples/token_classification/pii/prepare_openpii.py
+python examples/token_classification/pii/dataset/prepare_openpii.py
 
 # English only
-python examples/token_classification/pii/prepare_openpii.py --languages en
+python examples/token_classification/pii/dataset/prepare_openpii.py --languages en
 
 # Multiple languages
-python examples/token_classification/pii/prepare_openpii.py --languages en,fr,de
+python examples/token_classification/pii/dataset/prepare_openpii.py --languages en,fr,de
 
 # Use a local snapshot already on disk
-python examples/token_classification/pii/prepare_openpii.py --source local --local-path data/raw/pii
+python examples/token_classification/pii/dataset/prepare_openpii.py --source local --local-path data/raw/pii
 
 # Different model tokenizer
-python examples/token_classification/pii/prepare_openpii.py --model xlm-roberta-base
+python examples/token_classification/pii/dataset/prepare_openpii.py --model xlm-roberta-base
 
 # Only label the first subword of each entity (legacy HF recipe; default labels all)
-python examples/token_classification/pii/prepare_openpii.py --no-label-all-tokens
+python examples/token_classification/pii/dataset/prepare_openpii.py --no-label-all-tokens
 """
 
 import argparse
