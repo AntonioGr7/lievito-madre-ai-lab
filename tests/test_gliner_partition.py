@@ -8,7 +8,7 @@ for mod in ("datasets", "transformers", "gliner"):
 
 import pytest
 
-from lievito_madre_ai_lab.encoder.gliner_entity_extraction.dataset import (  # noqa: E402
+from lievito_madre_ai_lab.finetuning.encoder.gliner_entity_extraction.dataset import (  # noqa: E402
     partition_entity_types,
 )
 

@@ -30,11 +30,11 @@ Usage
 
 CLI
 ---
-  python -m lievito_madre_ai_lab.encoder.text_classification.serve \\
+  python -m lievito_madre_ai_lab.finetuning.encoder.text_classification.serve \\
       outputs/emotion_bert/final "I love this" "I'm so angry"
 
   # benchmark mode
-  python -m lievito_madre_ai_lab.encoder.text_classification.serve \\
+  python -m lievito_madre_ai_lab.finetuning.encoder.text_classification.serve \\
       outputs/emotion_bert/final --benchmark
 """
 from __future__ import annotations

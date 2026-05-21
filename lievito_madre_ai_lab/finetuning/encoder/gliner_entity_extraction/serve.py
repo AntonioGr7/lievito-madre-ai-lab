@@ -14,7 +14,7 @@ from typing import Any
 import torch
 import torch.nn as nn
 
-from lievito_madre_ai_lab.encoder.gliner_entity_extraction.dataset import (
+from lievito_madre_ai_lab.finetuning.encoder.gliner_entity_extraction.dataset import (
     _split_words_with_offsets,
 )
 from lievito_madre_ai_lab.shared.preprocessing import load_preprocessing_meta

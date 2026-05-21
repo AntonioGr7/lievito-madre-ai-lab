@@ -38,7 +38,7 @@ from pathlib import Path
 
 from datasets import DatasetDict
 
-from lievito_madre_ai_lab.encoder.token_classification.dataset import (
+from lievito_madre_ai_lab.finetuning.encoder.token_classification.dataset import (
     ENTITY_TYPES,
     preview_alignment,
     save_preprocessing_meta,

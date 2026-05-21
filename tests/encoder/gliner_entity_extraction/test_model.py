@@ -28,7 +28,7 @@ def fake_gliner(monkeypatch):
 
 
 def test_load_gliner_stamps_train_and_holdout_types(fake_gliner):
-    from lievito_madre_ai_lab.encoder.gliner_entity_extraction.model import load_gliner
+    from lievito_madre_ai_lab.finetuning.encoder.gliner_entity_extraction.model import load_gliner
 
     model = load_gliner("any-model", train_types=["PERSON", "ORG"], holdout_types=["AGE"])
     assert list(model.config.train_types) == ["PERSON", "ORG"]
@@ -36,7 +36,7 @@ def test_load_gliner_stamps_train_and_holdout_types(fake_gliner):
 
 
 def test_load_gliner_stamps_loss_and_sampling(fake_gliner):
-    from lievito_madre_ai_lab.encoder.gliner_entity_extraction.model import load_gliner
+    from lievito_madre_ai_lab.finetuning.encoder.gliner_entity_extraction.model import load_gliner
 
     model = load_gliner(
         "any-model",
@@ -53,7 +53,7 @@ def test_load_gliner_stamps_loss_and_sampling(fake_gliner):
 
 
 def test_load_gliner_stamps_label_aliases(fake_gliner):
-    from lievito_madre_ai_lab.encoder.gliner_entity_extraction.model import load_gliner
+    from lievito_madre_ai_lab.finetuning.encoder.gliner_entity_extraction.model import load_gliner
 
     aliases = {"GIVENNAME": "given name", "SURNAME": "surname"}
     model = load_gliner("any-model", train_types=["GIVENNAME"], label_aliases=aliases)
@@ -61,14 +61,14 @@ def test_load_gliner_stamps_label_aliases(fake_gliner):
 
 
 def test_load_gliner_max_span_width(fake_gliner):
-    from lievito_madre_ai_lab.encoder.gliner_entity_extraction.model import load_gliner
+    from lievito_madre_ai_lab.finetuning.encoder.gliner_entity_extraction.model import load_gliner
 
     model = load_gliner("any-model", train_types=["X"], max_span_width=20)
     assert model.config.max_width == 20
 
 
 def test_load_gliner_empty_aliases_default(fake_gliner):
-    from lievito_madre_ai_lab.encoder.gliner_entity_extraction.model import load_gliner
+    from lievito_madre_ai_lab.finetuning.encoder.gliner_entity_extraction.model import load_gliner
 
     model = load_gliner("any-model", train_types=["X"])
     assert dict(model.config.label_aliases) == {}
@@ -76,7 +76,7 @@ def test_load_gliner_empty_aliases_default(fake_gliner):
 
 def test_load_gliner_lora_wraps_encoder(fake_gliner, monkeypatch):
     """When peft_cfg.enabled is True, model.model is replaced by a PeftModel."""
-    from lievito_madre_ai_lab.encoder.gliner_entity_extraction.model import load_gliner, PeftConfig
+    from lievito_madre_ai_lab.finetuning.encoder.gliner_entity_extraction.model import load_gliner, PeftConfig
 
     peft_module = types.ModuleType("peft")
 

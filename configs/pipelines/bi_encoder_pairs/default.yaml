@@ -24,7 +24,7 @@ chunking:
 # Query generation ------------------------------------------------------------
 # `styles` is the list of styles to emit per chunk. Each style produces one
 # query, so num_queries_per_chunk == len(styles). Keys must match the YAML at
-# lievito_madre_ai_lab/pipelines/prompts/query_gen.yaml.
+# lievito_madre_ai_lab/pipelines/embedding/prompts/query_gen.yaml.
 query_gen:
   styles:
     - natural_question

@@ -39,9 +39,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
+from tqdm.auto import tqdm
 
 from lievito_madre_ai_lab.pipelines.llm.base import LLMClient, LLMRequest, LLMResponse
-from lievito_madre_ai_lab.pipelines.synthetic.checkpoint import CheckpointStore
+from lievito_madre_ai_lab.pipelines.embedding.synthetic.checkpoint import CheckpointStore
 
 
 _DEFAULT_PROMPT_PATH = Path(__file__).parent.parent / "prompts" / "multi_hop_query_gen.yaml"
@@ -243,26 +244,32 @@ async def generate_multi_hop_queries_for_groups(
 
     in_memory_records: list[dict] = []
 
-    for start in range(0, len(pending), cfg.batch_size):
-        batch = pending[start : start + cfg.batch_size]
-        requests = [_build_request(g, prompt) for g in batch]
-        responses = await client.generate_batch(requests)
+    async def _tick(req: LLMRequest, pbar: tqdm) -> LLMResponse:
+        resp = await client.generate(req)
+        pbar.update(1)
+        return resp
 
-        batch_records: list[dict] = []
-        for group, resp in zip(batch, responses):
-            rows = _rows_from_response(group, resp)
-            if rows is None:
-                continue  # API error — don't checkpoint, retry next run.
-            batch_records.append({
-                "group_id": group["group_id"],
-                "doc_id": group["doc_id"],
-                "rows": rows,
-            })
+    with tqdm(total=len(pending), desc="multi-hop queries", unit="group") as pbar:
+        for start in range(0, len(pending), cfg.batch_size):
+            batch = pending[start : start + cfg.batch_size]
+            requests = [_build_request(g, prompt) for g in batch]
+            responses = await asyncio.gather(*(_tick(r, pbar) for r in requests))
 
-        if checkpoint is not None:
-            checkpoint.append_many(batch_records)
-        else:
-            in_memory_records.extend(batch_records)
+            batch_records: list[dict] = []
+            for group, resp in zip(batch, responses):
+                rows = _rows_from_response(group, resp)
+                if rows is None:
+                    continue  # API error — don't checkpoint, retry next run.
+                batch_records.append({
+                    "group_id": group["group_id"],
+                    "doc_id": group["doc_id"],
+                    "rows": rows,
+                })
+
+            if checkpoint is not None:
+                checkpoint.append_many(batch_records)
+            else:
+                in_memory_records.extend(batch_records)
 
     all_records = checkpoint.load_all() if checkpoint is not None else in_memory_records
     rows: list[dict] = []

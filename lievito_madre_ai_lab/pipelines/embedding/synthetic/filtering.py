@@ -24,9 +24,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
+from tqdm.auto import tqdm
 
-from lievito_madre_ai_lab.pipelines.llm.base import LLMClient, LLMRequest
-from lievito_madre_ai_lab.pipelines.synthetic.checkpoint import CheckpointStore
+from lievito_madre_ai_lab.pipelines.llm.base import LLMClient, LLMRequest, LLMResponse
+from lievito_madre_ai_lab.pipelines.embedding.synthetic.checkpoint import CheckpointStore
 
 
 _DEFAULT_JUDGE_PATH = Path(__file__).parent.parent / "prompts" / "judge.yaml"
@@ -192,28 +193,35 @@ async def _llm_judge(
 
     # Process pending rows in batches, writing per-batch to the checkpoint.
     in_memory_records: list[dict] = []
-    for start in range(0, len(pending), cfg.batch_size):
-        batch = pending[start : start + cfg.batch_size]
-        requests = [_build_judge_request(r, prompt) for r in batch]
-        responses = await client.generate_batch(requests)
 
-        batch_records: list[dict] = []
-        for row, resp in zip(batch, responses):
-            if resp.error:
-                continue  # transient — leave uncheckpointed so we retry.
-            score = _parse_judge_score(resp.text)
-            if score is None:
-                # Malformed response — checkpoint as None so we don't retry
-                # forever. The row will be dropped below.
-                rec = {"row_id": row.get("row_id"), "score": None}
-            else:
-                rec = {"row_id": row.get("row_id"), "score": score}
-            batch_records.append(rec)
+    async def _tick(req: LLMRequest, pbar: tqdm) -> LLMResponse:
+        resp = await client.generate(req)
+        pbar.update(1)
+        return resp
 
-        if checkpoint is not None:
-            # Only records with a row_id are persistable.
-            checkpoint.append_many([r for r in batch_records if r.get("row_id") is not None])
-        in_memory_records.extend(batch_records)
+    with tqdm(total=len(pending), desc="judge", unit="row") as pbar:
+        for start in range(0, len(pending), cfg.batch_size):
+            batch = pending[start : start + cfg.batch_size]
+            requests = [_build_judge_request(r, prompt) for r in batch]
+            responses = await asyncio.gather(*(_tick(r, pbar) for r in requests))
+
+            batch_records: list[dict] = []
+            for row, resp in zip(batch, responses):
+                if resp.error:
+                    continue  # transient — leave uncheckpointed so we retry.
+                score = _parse_judge_score(resp.text)
+                if score is None:
+                    # Malformed response — checkpoint as None so we don't retry
+                    # forever. The row will be dropped below.
+                    rec = {"row_id": row.get("row_id"), "score": None}
+                else:
+                    rec = {"row_id": row.get("row_id"), "score": score}
+                batch_records.append(rec)
+
+            if checkpoint is not None:
+                # Only records with a row_id are persistable.
+                checkpoint.append_many([r for r in batch_records if r.get("row_id") is not None])
+            in_memory_records.extend(batch_records)
 
     # Build the final kept list — merge persisted + current scores.
     scores_by_rid: dict[str, int | None] = {

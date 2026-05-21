@@ -2,7 +2,7 @@
 """Build a char-offset GLiNER DatasetDict from the ai4privacy OpenPII corpus.
 
 This is the worked example of the char-offset contract that
-`lievito_madre_ai_lab.encoder.gliner_entity_extraction.dataset` expects.
+`lievito_madre_ai_lab.finetuning.encoder.gliner_entity_extraction.dataset` expects.
 Copy this file, adapt it to your corpus, and place it anywhere outside
 `scripts/` — the train script only cares about the on-disk output.
 
@@ -28,7 +28,7 @@ from pathlib import Path
 
 from datasets import Dataset, DatasetDict, load_dataset, load_from_disk
 
-from lievito_madre_ai_lab.encoder.gliner_entity_extraction.dataset import (
+from lievito_madre_ai_lab.finetuning.encoder.gliner_entity_extraction.dataset import (
     collect_entity_types,
     partition_entity_types,
     validate_row,

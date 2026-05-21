@@ -16,7 +16,7 @@ Two optional flows fire only if the saved model was trained for them:
   - **Instruction prompts** — if the model carries named ``query`` /
     ``document`` prompts, the script re-runs ``search`` asymmetrically.
 """
-from lievito_madre_ai_lab.embedding.bi_encoder import serve as _serve
+from lievito_madre_ai_lab.finetuning.embedding.bi_encoder import serve as _serve
 from lievito_madre_ai_lab.shared.preprocessing import load_preprocessing_meta
 
 print(f"[serve loaded from: {_serve.__file__}]")

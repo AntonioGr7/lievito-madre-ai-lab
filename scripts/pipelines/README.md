@@ -117,7 +117,7 @@ The pair dataset drops straight into the existing bi-encoder workflow:
 ```bash
 # Stage 1 — train on pairs with in-batch negatives (MNRL).
 python scripts/embedding_bi_encoder/train_bi_encoder.py \
-    --config configs/embedding/bi_encoder/smoke_r1.yaml \
+    --config configs/embedding/bi_encoder/smoke/smoke_r1.yaml \
     --processed-dir data/processed/my-pairs
 
 # Stage 2 — mine hard negatives with the freshly-tuned model.

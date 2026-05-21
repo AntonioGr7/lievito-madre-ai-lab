@@ -44,11 +44,11 @@ Usage
 
 CLI
 ---
-  python -m lievito_madre_ai_lab.embedding.bi_encoder.serve \\
+  python -m lievito_madre_ai_lab.finetuning.embedding.bi_encoder.serve \\
       outputs/run/final "semantic search" --prompt-name query
 
   # Matryoshka truncation
-  python -m lievito_madre_ai_lab.embedding.bi_encoder.serve \\
+  python -m lievito_madre_ai_lab.finetuning.embedding.bi_encoder.serve \\
       outputs/run/final "text" --truncate-dim 64
 """
 from __future__ import annotations
@@ -62,7 +62,7 @@ import torch
 import torch.nn as nn
 from sentence_transformers import SentenceTransformer
 
-from lievito_madre_ai_lab.embedding.bi_encoder.model import truncate_encoder_layers
+from lievito_madre_ai_lab.finetuning.embedding.bi_encoder.model import truncate_encoder_layers
 from lievito_madre_ai_lab.shared.preprocessing import load_preprocessing_meta
 
 log = logging.getLogger(__name__)

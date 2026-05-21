@@ -31,7 +31,7 @@ from dataclasses import dataclass
 from datasets import Dataset, Sequence, Value
 from sentence_transformers import CrossEncoder
 
-from lievito_madre_ai_lab.embedding.bi_encoder.dataset import (
+from lievito_madre_ai_lab.finetuning.embedding.bi_encoder.dataset import (
     LABEL_COLUMN,
     text_columns,
 )

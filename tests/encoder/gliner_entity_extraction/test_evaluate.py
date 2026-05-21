@@ -6,7 +6,7 @@ for mod in ("gliner",):
     if mod not in sys.modules:
         sys.modules[mod] = types.ModuleType(mod)
 
-from lievito_madre_ai_lab.encoder.gliner_entity_extraction.evaluate import (  # noqa: E402
+from lievito_madre_ai_lab.finetuning.encoder.gliner_entity_extraction.evaluate import (  # noqa: E402
     score_predictions,
 )
 

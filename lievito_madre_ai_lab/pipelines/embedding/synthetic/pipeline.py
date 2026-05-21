@@ -27,23 +27,23 @@ from typing import Iterator
 from datasets import Dataset, DatasetDict, load_from_disk
 
 from lievito_madre_ai_lab.pipelines.llm.base import LLMClient
-from lievito_madre_ai_lab.pipelines.synthetic.checkpoint import CheckpointStore
-from lievito_madre_ai_lab.pipelines.synthetic.chunking import (
+from lievito_madre_ai_lab.pipelines.embedding.synthetic.checkpoint import CheckpointStore
+from lievito_madre_ai_lab.pipelines.embedding.synthetic.chunking import (
     ChunkingConfig,
     chunk_documents,
 )
-from lievito_madre_ai_lab.pipelines.synthetic.filtering import (
+from lievito_madre_ai_lab.pipelines.embedding.synthetic.filtering import (
     FilterConfig,
     JudgeConfig,
     filter_pairs,
 )
-from lievito_madre_ai_lab.pipelines.synthetic.multi_hop import (
+from lievito_madre_ai_lab.pipelines.embedding.synthetic.multi_hop import (
     MultiHopConfig,
     build_multi_hop_groups,
     compute_n_groups,
     generate_multi_hop_queries_for_groups,
 )
-from lievito_madre_ai_lab.pipelines.synthetic.query_generation import (
+from lievito_madre_ai_lab.pipelines.embedding.synthetic.query_generation import (
     QueryGenConfig,
     generate_queries_for_chunks,
 )

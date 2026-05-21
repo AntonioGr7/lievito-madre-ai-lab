@@ -23,9 +23,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
+from tqdm.auto import tqdm
 
 from lievito_madre_ai_lab.pipelines.llm.base import LLMClient, LLMRequest, LLMResponse
-from lievito_madre_ai_lab.pipelines.synthetic.checkpoint import CheckpointStore
+from lievito_madre_ai_lab.pipelines.embedding.synthetic.checkpoint import CheckpointStore
 
 
 _DEFAULT_PROMPT_PATH = Path(__file__).parent.parent / "prompts" / "query_gen.yaml"
@@ -167,27 +168,33 @@ async def generate_queries_for_chunks(
 
     in_memory_records: list[dict] = []
 
-    for start in range(0, len(pending), cfg.batch_size):
-        batch = pending[start : start + cfg.batch_size]
-        requests = [_build_request(c, prompt, cfg.styles) for c in batch]
-        responses = await client.generate_batch(requests)
+    async def _tick(req: LLMRequest, pbar: tqdm) -> LLMResponse:
+        resp = await client.generate(req)
+        pbar.update(1)
+        return resp
 
-        batch_records: list[dict] = []
-        for chunk, resp in zip(batch, responses):
-            rows = _rows_from_response(chunk, resp)
-            if rows is None:
-                # API error — leave uncheckpointed so the next run retries.
-                continue
-            batch_records.append({
-                "chunk_id": chunk["chunk_id"],
-                "doc_id": chunk["doc_id"],
-                "rows": rows,
-            })
+    with tqdm(total=len(pending), desc="single-hop queries", unit="chunk") as pbar:
+        for start in range(0, len(pending), cfg.batch_size):
+            batch = pending[start : start + cfg.batch_size]
+            requests = [_build_request(c, prompt, cfg.styles) for c in batch]
+            responses = await asyncio.gather(*(_tick(r, pbar) for r in requests))
 
-        if checkpoint is not None:
-            checkpoint.append_many(batch_records)
-        else:
-            in_memory_records.extend(batch_records)
+            batch_records: list[dict] = []
+            for chunk, resp in zip(batch, responses):
+                rows = _rows_from_response(chunk, resp)
+                if rows is None:
+                    # API error — leave uncheckpointed so the next run retries.
+                    continue
+                batch_records.append({
+                    "chunk_id": chunk["chunk_id"],
+                    "doc_id": chunk["doc_id"],
+                    "rows": rows,
+                })
+
+            if checkpoint is not None:
+                checkpoint.append_many(batch_records)
+            else:
+                in_memory_records.extend(batch_records)
 
     # Consolidate past + current results.
     all_records = checkpoint.load_all() if checkpoint is not None else in_memory_records

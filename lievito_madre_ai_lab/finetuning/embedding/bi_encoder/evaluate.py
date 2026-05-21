@@ -25,7 +25,7 @@ from sentence_transformers.evaluation import (
     TripletEvaluator,
 )
 
-from lievito_madre_ai_lab.embedding.bi_encoder.dataset import (
+from lievito_madre_ai_lab.finetuning.embedding.bi_encoder.dataset import (
     BiEncoderShape,
     infer_shape,
     text_columns,

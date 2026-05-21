@@ -17,13 +17,13 @@ load_dotenv()
 
 from datasets import ClassLabel, load_from_disk
 
-from lievito_madre_ai_lab.encoder.text_classification.dataset import (
+from lievito_madre_ai_lab.finetuning.encoder.text_classification.dataset import (
     load_preprocessing_meta,
     save_preprocessing_meta,
 )
-from lievito_madre_ai_lab.encoder.text_classification.evaluate import build_compute_metrics
-from lievito_madre_ai_lab.encoder.text_classification.model import load_model_and_tokenizer
-from lievito_madre_ai_lab.encoder.text_classification.trainer import build_trainer, build_training_args
+from lievito_madre_ai_lab.finetuning.encoder.text_classification.evaluate import build_compute_metrics
+from lievito_madre_ai_lab.finetuning.encoder.text_classification.model import load_model_and_tokenizer
+from lievito_madre_ai_lab.finetuning.encoder.text_classification.trainer import build_trainer, build_training_args
 from lievito_madre_ai_lab.shared.config import TrainConfig, compute_total_training_steps, load_config
 from lievito_madre_ai_lab.shared.preprocessing import (
     assert_tokenizer_matches,

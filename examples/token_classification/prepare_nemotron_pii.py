@@ -47,7 +47,7 @@ from pathlib import Path
 
 from datasets import Dataset, DatasetDict, Features, Value, load_dataset, load_from_disk
 
-from lievito_madre_ai_lab.encoder.token_classification.dataset import (
+from lievito_madre_ai_lab.finetuning.encoder.token_classification.dataset import (
     collect_entity_types,
     preview_alignment,
     save_preprocessing_meta,

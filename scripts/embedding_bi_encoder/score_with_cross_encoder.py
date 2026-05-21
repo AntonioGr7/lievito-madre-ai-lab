@@ -26,7 +26,7 @@ from pathlib import Path
 from datasets import DatasetDict, load_from_disk
 from sentence_transformers import CrossEncoder
 
-from lievito_madre_ai_lab.embedding.bi_encoder.distill import (
+from lievito_madre_ai_lab.finetuning.embedding.bi_encoder.distill import (
     ScoringConfig,
     add_cross_encoder_scores,
 )

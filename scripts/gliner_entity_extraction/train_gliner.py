@@ -23,16 +23,16 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from lievito_madre_ai_lab.encoder.gliner_entity_extraction.dataset import (
+from lievito_madre_ai_lab.finetuning.encoder.gliner_entity_extraction.dataset import (
     load_processed,
     to_native_dataset,
 )
-from lievito_madre_ai_lab.encoder.gliner_entity_extraction.evaluate import evaluate_split
-from lievito_madre_ai_lab.encoder.gliner_entity_extraction.model import (
+from lievito_madre_ai_lab.finetuning.encoder.gliner_entity_extraction.evaluate import evaluate_split
+from lievito_madre_ai_lab.finetuning.encoder.gliner_entity_extraction.model import (
     PeftConfig,
     load_gliner,
 )
-from lievito_madre_ai_lab.encoder.gliner_entity_extraction.trainer import (
+from lievito_madre_ai_lab.finetuning.encoder.gliner_entity_extraction.trainer import (
     GLiNERTrainCfg,
     build_trainer,
     build_training_args,

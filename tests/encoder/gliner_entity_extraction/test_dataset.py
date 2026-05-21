@@ -8,7 +8,7 @@ for mod in ("gliner",):
 
 import pytest
 
-from lievito_madre_ai_lab.encoder.gliner_entity_extraction.dataset import (  # noqa: E402
+from lievito_madre_ai_lab.finetuning.encoder.gliner_entity_extraction.dataset import (  # noqa: E402
     validate_row,
     partition_entity_types,
     collect_entity_types,
@@ -71,7 +71,7 @@ def test_validate_row_extra_columns_ignored():
 def test_load_processed_round_trip(tmp_path):
     """`load_processed` reads a DatasetDict we just wrote, returning rows + types."""
     from datasets import Dataset, DatasetDict
-    from lievito_madre_ai_lab.encoder.gliner_entity_extraction.dataset import load_processed
+    from lievito_madre_ai_lab.finetuning.encoder.gliner_entity_extraction.dataset import load_processed
 
     ds = DatasetDict({
         "train": Dataset.from_list([{"text": "Hi Maria", "spans": [{"start": 3, "end": 8, "label": "PERSON"}]}]),
@@ -90,7 +90,7 @@ def test_load_processed_round_trip(tmp_path):
 
 def test_load_processed_missing_train_types(tmp_path):
     from datasets import Dataset, DatasetDict
-    from lievito_madre_ai_lab.encoder.gliner_entity_extraction.dataset import load_processed
+    from lievito_madre_ai_lab.finetuning.encoder.gliner_entity_extraction.dataset import load_processed
 
     ds = DatasetDict({"train": Dataset.from_list([{"text": "x", "spans": []}])})
     ds.save_to_disk(str(tmp_path))
@@ -100,7 +100,7 @@ def test_load_processed_missing_train_types(tmp_path):
 
 def test_load_processed_invalid_row_raises(tmp_path):
     from datasets import Dataset, DatasetDict
-    from lievito_madre_ai_lab.encoder.gliner_entity_extraction.dataset import load_processed
+    from lievito_madre_ai_lab.finetuning.encoder.gliner_entity_extraction.dataset import load_processed
 
     bad = {"text": "x", "spans": [{"start": 5, "end": 2, "label": "X"}]}
     ds = DatasetDict({"train": Dataset.from_list([bad])})

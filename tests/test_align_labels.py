@@ -18,7 +18,7 @@ sys.modules["datasets"].Sequence = lambda *a, **kw: None
 sys.modules["datasets"].DatasetDict = type("DatasetDict", (), {})
 sys.modules["transformers"].AutoTokenizer = type("AutoTokenizer", (), {})
 
-from lievito_madre_ai_lab.encoder.token_classification.dataset import (  # noqa: E402
+from lievito_madre_ai_lab.finetuning.encoder.token_classification.dataset import (  # noqa: E402
     LABEL2ID,
     _align_labels,
 )

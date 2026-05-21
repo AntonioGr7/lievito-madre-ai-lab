@@ -36,7 +36,7 @@ from pathlib import Path
 
 from datasets import Dataset, DatasetDict, Features, Value, load_dataset, load_from_disk
 
-from lievito_madre_ai_lab.encoder.gliner_entity_extraction.dataset import (
+from lievito_madre_ai_lab.finetuning.encoder.gliner_entity_extraction.dataset import (
     collect_entity_types,
     partition_entity_types,
     validate_row,

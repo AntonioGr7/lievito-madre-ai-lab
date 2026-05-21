@@ -45,7 +45,7 @@ bash scripts/embedding_bi_encoder/smoke_test_all.sh 3         # just Recipe 3
 bash scripts/embedding_bi_encoder/smoke_test_all.sh 4 5 8     # a subset
 ```
 
-Each recipe ships its own complete smoke YAML at [configs/embedding/bi_encoder/smoke_r&lt;N&gt;.yaml](../../configs/embedding/bi_encoder/) — these double as the minimal working template for adapting Recipe N to your real data.
+Each recipe ships its own complete smoke YAML at [configs/embedding/bi_encoder/smoke/smoke_r&lt;N&gt;.yaml](../../configs/embedding/bi_encoder/smoke/) — these double as the minimal working template for adapting Recipe N to your real data.
 
 ---
 
@@ -240,7 +240,7 @@ python scripts/embedding_bi_encoder/train_bi_encoder.py \
     --config configs/embedding/bi_encoder/<your_recipe5>.yaml
 ```
 
-The stage-2 YAML differs from stage 1 in four places (see [`smoke_r5.yaml`](../../configs/embedding/bi_encoder/smoke_r5.yaml) for the full template):
+The stage-2 YAML differs from stage 1 in four places (see [`smoke_r5.yaml`](../../configs/embedding/bi_encoder/smoke/smoke_r5.yaml) for the full template):
 
 ```yaml
 model_name: outputs/<stage1_run>/final          # continue from stage 1

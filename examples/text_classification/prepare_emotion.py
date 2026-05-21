@@ -33,7 +33,7 @@ python examples/text_classification/prepare_emotion.py --model roberta-base --ma
 import argparse
 from pathlib import Path
 
-from lievito_madre_ai_lab.encoder.text_classification.dataset import (
+from lievito_madre_ai_lab.finetuning.encoder.text_classification.dataset import (
     save_preprocessing_meta,
     tokenize_for_trainer,
 )

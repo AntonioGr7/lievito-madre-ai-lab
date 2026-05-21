@@ -31,7 +31,7 @@ from pathlib import Path
 
 from datasets import Dataset, DatasetDict, load_dataset
 
-from lievito_madre_ai_lab.embedding.bi_encoder.dataset import (
+from lievito_madre_ai_lab.finetuning.embedding.bi_encoder.dataset import (
     save_preprocessing_meta,
     validate_dataset,
 )

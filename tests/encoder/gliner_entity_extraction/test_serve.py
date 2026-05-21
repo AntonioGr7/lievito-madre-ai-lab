@@ -39,7 +39,7 @@ def patch_gliner(monkeypatch):
 
 
 def test_predictor_loads_full_ft_save(patch_gliner, tmp_path):
-    from lievito_madre_ai_lab.encoder.gliner_entity_extraction.serve import GLiNERPredictor
+    from lievito_madre_ai_lab.finetuning.encoder.gliner_entity_extraction.serve import GLiNERPredictor
 
     pred = GLiNERPredictor(tmp_path, use_compile=False, warmup_steps=0)
     out = pred.predict_one("Eve was here")
@@ -63,7 +63,7 @@ def test_predictor_loads_lora_save(patch_gliner, tmp_path, monkeypatch):
     peft_module.PeftModel = FakePeftModel
     monkeypatch.setitem(sys.modules, "peft", peft_module)
 
-    from lievito_madre_ai_lab.encoder.gliner_entity_extraction.serve import GLiNERPredictor
+    from lievito_madre_ai_lab.finetuning.encoder.gliner_entity_extraction.serve import GLiNERPredictor
 
     pred = GLiNERPredictor(tmp_path, use_compile=False, warmup_steps=0)
     # After merge, the predictor's underlying encoder is the merged module.
@@ -72,7 +72,7 @@ def test_predictor_loads_lora_save(patch_gliner, tmp_path, monkeypatch):
 
 def test_predict_uses_batch_predict_entities(patch_gliner, tmp_path):
     """The new _forward path calls batch_predict_entities, not the per-text loop."""
-    from lievito_madre_ai_lab.encoder.gliner_entity_extraction.serve import GLiNERPredictor
+    from lievito_madre_ai_lab.finetuning.encoder.gliner_entity_extraction.serve import GLiNERPredictor
 
     pred = GLiNERPredictor(tmp_path, use_compile=False, warmup_steps=0)
     # Mock returns one empty span-list per input text (so the result-zipping below

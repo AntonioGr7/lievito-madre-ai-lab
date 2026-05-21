@@ -19,14 +19,14 @@ load_dotenv()
 
 from datasets import load_from_disk
 
-from lievito_madre_ai_lab.embedding.bi_encoder.dataset import (
+from lievito_madre_ai_lab.finetuning.embedding.bi_encoder.dataset import (
     load_preprocessing_meta,
     save_preprocessing_meta,
     validate_dataset,
 )
-from lievito_madre_ai_lab.embedding.bi_encoder.evaluate import build_evaluator
-from lievito_madre_ai_lab.embedding.bi_encoder.model import load_sentence_transformer
-from lievito_madre_ai_lab.embedding.bi_encoder.trainer import (
+from lievito_madre_ai_lab.finetuning.embedding.bi_encoder.evaluate import build_evaluator
+from lievito_madre_ai_lab.finetuning.embedding.bi_encoder.model import load_sentence_transformer
+from lievito_madre_ai_lab.finetuning.embedding.bi_encoder.trainer import (
     BidirectionalCfg,
     BiEncoderTrainCfg,
     GradientCachingCfg,

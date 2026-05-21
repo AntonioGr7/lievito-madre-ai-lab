@@ -8,7 +8,7 @@ the predictor's tokenizer and model so the checkpoint is only loaded once.
 """
 import torch
 
-from lievito_madre_ai_lab.encoder.token_classification import serve as _serve
+from lievito_madre_ai_lab.finetuning.encoder.token_classification import serve as _serve
 print(f"[serve loaded from: {_serve.__file__}]")
 TokenClassificationPredictor = _serve.TokenClassificationPredictor
 

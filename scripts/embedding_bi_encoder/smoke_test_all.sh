@@ -23,7 +23,7 @@ MINED_ENSEMBLE_DIR="data/processed/smoke-mined-ensemble"
 DISTILL_DIR="data/processed/smoke-distill"
 SILVER_DIR="data/processed/smoke-silver"
 
-CONFIG_DIR="configs/embedding/bi_encoder"
+CONFIG_DIR="configs/embedding/bi_encoder/smoke"
 OUT_BASE="outputs"
 
 # ── Models used by the mining + scoring side-stages ─────────────────────────

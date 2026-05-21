@@ -163,10 +163,10 @@ def build_trainer(
         UniEncoderTokenProcessor,
     )
 
-    from lievito_madre_ai_lab.encoder.gliner_entity_extraction.evaluate import (
+    from lievito_madre_ai_lab.finetuning.encoder.gliner_entity_extraction.evaluate import (
         build_eval_callback,
     )
-    from lievito_madre_ai_lab.encoder.gliner_entity_extraction.dataset import (
+    from lievito_madre_ai_lab.finetuning.encoder.gliner_entity_extraction.dataset import (
         to_native_dataset,
     )
 

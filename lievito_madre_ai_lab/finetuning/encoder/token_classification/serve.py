@@ -24,7 +24,7 @@ Usage
 
 CLI
 ---
-    python -m lievito_madre_ai_lab.encoder.token_classification.serve \\
+    python -m lievito_madre_ai_lab.finetuning.encoder.token_classification.serve \\
         outputs/pii_mbert/final "Send it to John Doe at john@example.com."
 """
 from __future__ import annotations

@@ -4,7 +4,7 @@ Prints extracted spans for a hardcoded multi-label paragraph using the
 train_types stamped on the model, plus an open-vocabulary call using the
 held-out entity types.
 """
-from lievito_madre_ai_lab.encoder.gliner_entity_extraction import serve as _serve
+from lievito_madre_ai_lab.finetuning.encoder.gliner_entity_extraction import serve as _serve
 
 print(f"[serve loaded from: {_serve.__file__}]")
 GLiNERPredictor = _serve.GLiNERPredictor

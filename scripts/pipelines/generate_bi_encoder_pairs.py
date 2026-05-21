@@ -33,14 +33,14 @@ from pathlib import Path
 import yaml
 
 from lievito_madre_ai_lab.pipelines.llm.providers import OpenAIClient
-from lievito_madre_ai_lab.pipelines.synthetic.chunking import ChunkingConfig
-from lievito_madre_ai_lab.pipelines.synthetic.filtering import FilterConfig, JudgeConfig
-from lievito_madre_ai_lab.pipelines.synthetic.multi_hop import MultiHopConfig
-from lievito_madre_ai_lab.pipelines.synthetic.pipeline import (
+from lievito_madre_ai_lab.pipelines.embedding.synthetic.chunking import ChunkingConfig
+from lievito_madre_ai_lab.pipelines.embedding.synthetic.filtering import FilterConfig, JudgeConfig
+from lievito_madre_ai_lab.pipelines.embedding.synthetic.multi_hop import MultiHopConfig
+from lievito_madre_ai_lab.pipelines.embedding.synthetic.pipeline import (
     PipelineConfig,
     run_pipeline_sync,
 )
-from lievito_madre_ai_lab.pipelines.synthetic.query_generation import QueryGenConfig
+from lievito_madre_ai_lab.pipelines.embedding.synthetic.query_generation import QueryGenConfig
 
 
 def parse_args() -> argparse.Namespace:

@@ -31,13 +31,13 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from lievito_madre_ai_lab.encoder.token_classification.dataset import (
+from lievito_madre_ai_lab.finetuning.encoder.token_classification.dataset import (
     load_preprocessing_meta,
     save_preprocessing_meta,
 )
-from lievito_madre_ai_lab.encoder.token_classification.evaluate import build_compute_metrics
-from lievito_madre_ai_lab.encoder.token_classification.model import load_model_and_tokenizer
-from lievito_madre_ai_lab.encoder.token_classification.trainer import build_trainer, build_training_args
+from lievito_madre_ai_lab.finetuning.encoder.token_classification.evaluate import build_compute_metrics
+from lievito_madre_ai_lab.finetuning.encoder.token_classification.model import load_model_and_tokenizer
+from lievito_madre_ai_lab.finetuning.encoder.token_classification.trainer import build_trainer, build_training_args
 from lievito_madre_ai_lab.shared.config import TrainConfig, compute_total_training_steps, load_config
 from lievito_madre_ai_lab.shared.preprocessing import (
     assert_tokenizer_matches,

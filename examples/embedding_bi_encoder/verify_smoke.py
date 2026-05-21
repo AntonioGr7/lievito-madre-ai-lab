@@ -43,7 +43,7 @@ def _require(cond: bool, msg: str) -> None:
 
 
 def verify_r1_r2_r6(model_dir: str) -> None:
-    from lievito_madre_ai_lab.embedding.bi_encoder.serve import BiEncoderPredictor
+    from lievito_madre_ai_lab.finetuning.embedding.bi_encoder.serve import BiEncoderPredictor
     predictor = BiEncoderPredictor(model_dir, use_compile=False, warmup_steps=0)
     sim_p, sim_u = _paraphrase_beats_unrelated(predictor)
     print(f"  sim(anchor, paraphrase) = {sim_p:.4f}")
@@ -82,7 +82,7 @@ def verify_r3_r7(model_dir: str, processed_dir: str) -> None:
 def verify_r4(model_dir: str) -> None:
     """Matryoshka 1D: encode at truncate_dim=64 returns (N, 64); paraphrase
     still outscores unrelated at full dim."""
-    from lievito_madre_ai_lab.embedding.bi_encoder.serve import BiEncoderPredictor
+    from lievito_madre_ai_lab.finetuning.embedding.bi_encoder.serve import BiEncoderPredictor
     predictor = BiEncoderPredictor(model_dir, use_compile=False, warmup_steps=0,
                                     default_truncate_dim=None)
     emb_full = predictor.encode([ANCHOR, PARAPHRASE, UNRELATED])
@@ -112,7 +112,7 @@ def verify_r5(model_dir: str) -> None:
     """Matryoshka 2D: predictor loads with truncate_layers=3 and produces
     non-empty embeddings. Quality at 3/6 layers after 1 epoch on synthetic
     data is not asserted — plumbing only."""
-    from lievito_madre_ai_lab.embedding.bi_encoder.serve import BiEncoderPredictor
+    from lievito_madre_ai_lab.finetuning.embedding.bi_encoder.serve import BiEncoderPredictor
     # Full model first — quality sanity at full depth + dim.
     full = BiEncoderPredictor(model_dir, use_compile=False, warmup_steps=0,
                                default_truncate_dim=None)
@@ -140,7 +140,7 @@ def verify_r5(model_dir: str) -> None:
 
 def verify_r8(model_dir: str) -> None:
     """Prompts: saved model exposes named prompts; encode(prompt_name="query") works."""
-    from lievito_madre_ai_lab.embedding.bi_encoder.serve import BiEncoderPredictor
+    from lievito_madre_ai_lab.finetuning.embedding.bi_encoder.serve import BiEncoderPredictor
     predictor = BiEncoderPredictor(model_dir, use_compile=False, warmup_steps=0)
     print(f"  prompts on model: {predictor.prompts}")
     _require(

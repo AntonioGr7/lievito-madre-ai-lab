@@ -46,7 +46,7 @@ from pathlib import Path
 from datasets import DatasetDict, load_from_disk
 from sentence_transformers import CrossEncoder, SentenceTransformer
 
-from lievito_madre_ai_lab.embedding.bi_encoder.mining import (
+from lievito_madre_ai_lab.finetuning.embedding.bi_encoder.mining import (
     MiningConfig,
     RetrieverSpec,
     mine_ensemble_for_dataset,
