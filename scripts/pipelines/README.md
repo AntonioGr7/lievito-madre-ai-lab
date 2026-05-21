@@ -92,7 +92,7 @@ head -1 data/raw/my-corpus.jsonl
 
 # 2. Dry-run on 50 docs without the judge to sanity-check the prompts.
 python scripts/pipelines/generate_bi_encoder_pairs.py \
-    --config configs/pipelines/bi_encoder_pairs/default.yaml \
+    --config examples/embedding_bi_encoder/custom_pairs/configs/sec_edgar_pairs.yaml \
     --max-documents 50 \
     --no-judge \
     --output data/processed/my-pairs-dryrun
@@ -105,7 +105,7 @@ python scripts/pipelines/generate_bi_encoder_pairs.py \
 
 # 4. Production run on the full corpus.
 python scripts/pipelines/generate_bi_encoder_pairs.py \
-    --config configs/pipelines/bi_encoder_pairs/default.yaml \
+    --config examples/embedding_bi_encoder/custom_pairs/configs/sec_edgar_pairs.yaml \
     --input data/raw/my-corpus.jsonl \
     --output data/processed/my-pairs
 ```
@@ -138,7 +138,7 @@ surface much sharper negatives once the retriever has been domain-adapted.
 
 ## Config knobs that matter most
 
-[configs/pipelines/bi_encoder_pairs/default.yaml](../../configs/pipelines/bi_encoder_pairs/default.yaml)
+[examples/embedding_bi_encoder/custom_pairs/configs/sec_edgar_pairs.yaml](../../examples/embedding_bi_encoder/custom_pairs/configs/sec_edgar_pairs.yaml)
 
 | Knob | Default | When to change |
 | --- | --- | --- |
@@ -172,21 +172,25 @@ lievito_madre_ai_lab/pipelines/
 ├── llm/
 │   ├── base.py              # LLMClient protocol + request/response types
 │   └── providers.py         # OpenAI async client (covers vLLM/Ollama via base_url)
-├── synthetic/
-│   ├── chunking.py          # tiktoken-based token-aware splitter
-│   ├── checkpoint.py        # append-only JSONL store for resumable LLM stages
-│   ├── query_generation.py  # one LLM call per chunk, multi-style JSON output
-│   ├── multi_hop.py         # adjacent K-chunk windows → multi-hop queries
-│   ├── filtering.py         # heuristic dedup + verbatim-overlap + LLM judge
-│   └── pipeline.py          # end-to-end orchestration → DatasetDict
-└── prompts/
-    ├── query_gen.yaml             # editable single-chunk generation prompt
-    ├── multi_hop_query_gen.yaml   # editable multi-chunk generation prompt
-    └── judge.yaml                 # editable judge rubric
+└── embedding/
+    ├── synthetic/
+    │   ├── chunking.py          # tiktoken-based token-aware splitter
+    │   ├── checkpoint.py        # append-only JSONL store for resumable LLM stages
+    │   ├── query_generation.py  # one LLM call per chunk, multi-style JSON output
+    │   ├── multi_hop.py         # adjacent K-chunk windows → multi-hop queries
+    │   ├── filtering.py         # heuristic dedup + verbatim-overlap + LLM judge
+    │   └── pipeline.py          # end-to-end orchestration → DatasetDict
+    └── prompts/
+        ├── query_gen.yaml             # editable single-chunk generation prompt
+        ├── multi_hop_query_gen.yaml   # editable multi-chunk generation prompt
+        └── judge.yaml                 # editable judge rubric
 
 scripts/pipelines/
 └── generate_bi_encoder_pairs.py   # CLI entry point
 
-configs/pipelines/bi_encoder_pairs/
-└── default.yaml             # production-ready config
+examples/embedding_bi_encoder/custom_pairs/
+├── README.md
+├── run.sh                          # download corpus → run pipeline
+└── configs/
+    └── sec_edgar_pairs.yaml        # worked-example config; copy + edit for your corpus
 ```

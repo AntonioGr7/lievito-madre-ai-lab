@@ -1,18 +1,21 @@
-# Default config for the bi-encoder synthetic-pair pipeline.
+# Worked example for the bi-encoder synthetic-pair pipeline, demoed on the
+# small SEC-EDGAR sample produced by:
+#   examples/embedding_bi_encoder/financial/dataset/download_sec_edgar.py
 #
-# All paths are relative to the repo root. The CLI loads this file, overlays
-# any --override flags, and runs documents → chunks → pairs → DatasetDict.
+# To adapt this to your own corpus: copy this folder, point `input_path` at
+# your jsonl ({id, text} per line) or HF dataset dir, and rerun. All paths
+# are relative to the repo root.
 #
 # Inputs and outputs ----------------------------------------------------------
-input_path: data/raw/example_corpus.jsonl   # jsonl with {id, text} per line, OR a HF dataset dir
-output_dir: data/processed/example-corpus-pairs
-input_format: auto                      # auto | jsonl | hf_dataset
+input_path: data/raw/sec-edgar-1000.jsonl     # produced by download_sec_edgar.py default sample
+output_dir: data/processed/sec-edgar-pairs
+input_format: auto                            # auto | jsonl | hf_dataset
 text_column: text
 id_column: id
 
-# Document cap for quick iteration. Set to e.g. 50 to dry-run the whole
-# pipeline against a tiny slice before paying for 10k chunks of LLM calls.
-max_documents: null
+# Demo cap — keeps the LLM bill tiny for first-time runs. Drop to null to
+# process every doc in `input_path` once you're happy with the output.
+max_documents: 20
 
 # Chunking --------------------------------------------------------------------
 chunking:

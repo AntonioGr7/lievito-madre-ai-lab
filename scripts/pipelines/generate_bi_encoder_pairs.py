@@ -10,17 +10,17 @@ Examples
 --------
 # 1. Production run from a jsonl corpus
 python scripts/pipelines/generate_bi_encoder_pairs.py \\
-    --config configs/pipelines/bi_encoder_pairs/default.yaml
+    --config examples/embedding_bi_encoder/custom_pairs/configs/sec_edgar_pairs.yaml
 
 # 2. Dry-run on 50 docs without the judge (cheaper iteration)
 python scripts/pipelines/generate_bi_encoder_pairs.py \\
-    --config configs/pipelines/bi_encoder_pairs/default.yaml \\
+    --config examples/embedding_bi_encoder/custom_pairs/configs/sec_edgar_pairs.yaml \\
     --max-documents 50 \\
     --no-judge
 
 # 3. Override input / output paths from the CLI
 python scripts/pipelines/generate_bi_encoder_pairs.py \\
-    --config configs/pipelines/bi_encoder_pairs/default.yaml \\
+    --config examples/embedding_bi_encoder/custom_pairs/configs/sec_edgar_pairs.yaml \\
     --input data/raw/finance-corpus.jsonl \\
     --output data/processed/finance-pairs
 """

@@ -105,7 +105,7 @@ def main() -> None:
     print(
         "Next: point the pipeline at it, e.g.\n"
         f"  python scripts/pipelines/generate_bi_encoder_pairs.py \\\n"
-        f"      --config configs/pipelines/bi_encoder_pairs/default.yaml \\\n"
+        f"      --config examples/embedding_bi_encoder/custom_pairs/configs/sec_edgar_pairs.yaml \\\n"
         f"      --input {out_path}"
     )
 
