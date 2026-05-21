@@ -13,11 +13,11 @@ loaded directly — no HF push needed for the open tasks.
 
 Usage
 -----
-python examples/embedding_bi_encoder/eval_rteb_finance.py \\
+python examples/embedding_bi_encoder/financial/eval_rteb_finance.py \\
     --model-dir outputs/bi_encoder_fiqa_ettin68m/exp_01/final
 
 # Optional — restrict to a single task while iterating:
-python examples/embedding_bi_encoder/eval_rteb_finance.py \\
+python examples/embedding_bi_encoder/financial/eval_rteb_finance.py \\
     --model-dir <path> --tasks FinanceBench
 """
 from __future__ import annotations

@@ -3,18 +3,18 @@
 # the RTEB-finance English open subset (FinanceBench, HC3Finance, FinQA).
 #
 # Run from anywhere (script cd's to repo root):
-#   bash examples/embedding_bi_encoder/fiqa/run.sh
+#   bash examples/embedding_bi_encoder/financial/fiqa/run.sh
 
 set -euo pipefail
-cd "$(dirname "${BASH_SOURCE[0]}")/../../.."
+cd "$(dirname "${BASH_SOURCE[0]}")/../../../.."
 
-CONFIG="examples/embedding_bi_encoder/fiqa/configs/fiqa_ettin68m.yaml"
+CONFIG="examples/embedding_bi_encoder/financial/fiqa/configs/fiqa_ettin68m.yaml"
 MODEL_DIR="outputs/bi_encoder_fiqa_ettin68m/exp_01/final"
 
 echo "============================================================"
 echo "Step 1/3  Build FiQA (anchor, positive) pairs from BeIR"
 echo "============================================================"
-python examples/embedding_bi_encoder/fiqa/prepare_fiqa.py
+python examples/embedding_bi_encoder/financial/fiqa/prepare_fiqa.py
 
 echo
 echo "============================================================"
@@ -26,4 +26,4 @@ echo
 echo "============================================================"
 echo "Step 3/3  Benchmark on RTEB-finance English open subset"
 echo "============================================================"
-python examples/embedding_bi_encoder/eval_rteb_finance.py --model-dir "$MODEL_DIR"
+python examples/embedding_bi_encoder/financial/eval_rteb_finance.py --model-dir "$MODEL_DIR"

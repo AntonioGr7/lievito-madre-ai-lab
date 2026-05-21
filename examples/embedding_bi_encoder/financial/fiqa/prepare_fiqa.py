@@ -19,7 +19,7 @@ Output schema (pair shape):
 
 Usage
 -----
-python examples/embedding_bi_encoder/fiqa/prepare_fiqa.py
+python examples/embedding_bi_encoder/financial/fiqa/prepare_fiqa.py
 # writes:
 #   data/processed/fiqa-bi-encoder/{train,validation,test}/...
 #   data/processed/fiqa-bi-encoder/preprocessing.json

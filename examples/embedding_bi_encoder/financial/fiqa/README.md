@@ -5,16 +5,16 @@ Fine-tune an Ettin-68m bi-encoder on FiQA-2018 train, then benchmark against the
 ## Run
 
 ```bash
-bash examples/embedding_bi_encoder/fiqa/run.sh
+bash examples/embedding_bi_encoder/financial/fiqa/run.sh
 ```
 
 Or step by step:
 
 ```bash
-python examples/embedding_bi_encoder/fiqa/prepare_fiqa.py
+python examples/embedding_bi_encoder/financial/fiqa/prepare_fiqa.py
 python scripts/embedding_bi_encoder/train_bi_encoder.py \
-    --config examples/embedding_bi_encoder/fiqa/configs/fiqa_ettin68m.yaml
-python examples/embedding_bi_encoder/eval_rteb_finance.py \
+    --config examples/embedding_bi_encoder/financial/fiqa/configs/fiqa_ettin68m.yaml
+python examples/embedding_bi_encoder/financial/eval_rteb_finance.py \
     --model-dir outputs/bi_encoder_fiqa_ettin68m/exp_01/final
 ```
 
