@@ -117,12 +117,12 @@ python scripts/embedding_bi_encoder/train_bi_encoder.py \
 
 ```bash
 # 1. Build a DatasetDict on disk with two string columns: anchor, positive.
-# 2. Train.
+# 2. Train. Copy a smoke recipe and scale up the batch sizes for production:
 python scripts/embedding_bi_encoder/train_bi_encoder.py \
-    --config configs/embedding/bi_encoder/modernbert_mnrl.yaml
+    --config examples/embedding_bi_encoder/smoke/configs/smoke_r1.yaml
 ```
 
-The trainer auto-picks `MultipleNegativesRankingLoss` with `NO_DUPLICATES` batch sampling. **GradCache is already on** in the shipped YAML — the loss is transparently swapped to its cached variant, so `per_device_train_batch_size: 256` is the default and memory stays bounded by `mini_batch_size: 32`.
+The trainer auto-picks `MultipleNegativesRankingLoss` with `NO_DUPLICATES` batch sampling. **GradCache is already on** in the shipped smoke YAMLs — the loss is transparently swapped to its cached variant. The smoke configs ship at tiny batch sizes (`per_device_train_batch_size: 4`); for real training push to `256` with `mini_batch_size: 32` (see the [GradCache reference](#gradcache-gradient-caching--the-memory-trick) for the per-GPU table).
 
 If you OOM, lower `mini_batch_size` first (peak memory drops). Only lower `per_device_train_batch_size` once `mini_batch_size` is already tiny — shrinking the logical batch directly hurts model quality.
 
@@ -150,7 +150,7 @@ python scripts/embedding_bi_encoder/mine_hard_negatives.py \
 # 2. Train. The trainer auto-detects the multi_negative shape and uses
 #    every mined negative as a hard sample in the MNRL in-batch loss.
 python scripts/embedding_bi_encoder/train_bi_encoder.py \
-    --config configs/embedding/bi_encoder/modernbert_mnrl.yaml
+    --config examples/embedding_bi_encoder/smoke/configs/smoke_r2.yaml
 ```
 
 Point `processed_dir` in the YAML at `data/processed/my-pairs-mined`.
@@ -176,7 +176,7 @@ python scripts/embedding_bi_encoder/score_with_cross_encoder.py \
 # 3. Switch the loss in the YAML to DistillKLDivLoss, then train.
 #    bi_encoder.loss.name: DistillKLDivLoss
 python scripts/embedding_bi_encoder/train_bi_encoder.py \
-    --config configs/embedding/bi_encoder/modernbert_mnrl.yaml
+    --config examples/embedding_bi_encoder/smoke/configs/smoke_r3.yaml
 ```
 
 The trainer hard-errors if you point `DistillKLDivLoss` at a non-distill dataset (or vice versa). The teacher must be **stronger** than the student bi-encoder — otherwise distillation just imitates a weaker model.
@@ -437,7 +437,7 @@ GradCache fixes this by splitting the batch into `mini_batch_size` chunks, runni
 
 Trade-off: each step is ~30–50% slower (the model is re-run during the second pass). For any memory-bound setup, this is a net quality win — *not* training at large batch hurts the model far more than a slower step.
 
-Shipped defaults (see [modernbert_mnrl.yaml](../../configs/embedding/bi_encoder/modernbert_mnrl.yaml)):
+Recommended production values:
 
 ```yaml
 per_device_train_batch_size: 256       # logical batch the loss sees
@@ -467,6 +467,25 @@ Rule of thumb:
 - **OOM → halve `mini_batch_size` first**, not `per_device_train_batch_size`. The logical batch is what controls quality; the mini-batch is just the memory dial.
 - Larger `mini_batch_size` = faster per step (fewer chunks to re-run).
 - The effective batch (`per_device_train_batch_size × gradient_accumulation_steps × world_size`) is what the loss sees — push it to 256+ for serious training.
+
+### Bidirectional training
+
+Extract a second contrastive signal from the same `(query, document)` data by also training the document → query direction. The base loss is called twice per step — once in dataset order (`q` is anchor, in-batch softmax over docs), once with columns 0/1 swapped (`d` is anchor, in-batch softmax over queries). Per-column prompts stay bound to columns: `search_document:` always wraps the doc and `search_query:` always wraps the query, regardless of which one is currently the anchor — the dataset never needs doc/doc rows. Wired up by `BidirectionalLoss` in [trainer.py](../../lievito_madre_ai_lab/finetuning/embedding/bi_encoder/trainer.py).
+
+Enable:
+
+```yaml
+bi_encoder:
+  bidirectional:
+    enabled: true
+    weight: 1.0    # λ on the backward (d → q) term; equal weighting by default
+```
+
+**Best on the `pair` shape with asymmetric prompts** — the gain comes from giving the model a *second* in-batch normalisation axis, and that only pays off when the two columns are encoded with genuinely different prefixes (E5, Nomic, BGE, etc.). For `triplet` / `multi_negative` shapes only columns 0/1 swap; trailing hard negatives stay in place — well-defined but less standard, the trainer prints a warning on startup.
+
+**Incompatible with `DistillKLDivLoss`** — listwise KL distillation has no notion of direction (the teacher distribution IS the target). The config raises at parse time if both are enabled.
+
+**Cost**: ~2× the loss-time per step (the encoder runs once per direction). End-to-end step latency is less than 2× because data-loading, eval, and optimiser cost are unchanged. Composes cleanly with GradCache (each direction independently uses the cached variant) and with Matryoshka (the dim/depth losses wrap the bidirectional loss, not the other way around).
 
 ### Temperature scaling
 
