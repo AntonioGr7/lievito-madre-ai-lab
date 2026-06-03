@@ -139,6 +139,33 @@ def _split_words_with_offsets(text: str, words_splitter) -> tuple[list[str], lis
     return tokens, offsets
 
 
+def _assert_offsets_available(split, words_splitter) -> None:
+    """Fail fast if *words_splitter* yields no character offsets.
+
+    Every span → token remapping in this module depends on the splitter
+    returning ``(token, start, end)`` triples. If it returns bare tokens, the
+    offsets fall back to ``(-1, -1)`` (see ``_split_words_with_offsets``) and
+    ``_spans_for_window`` then drops *every* span — the model would silently
+    train on empty ``ner`` lists, a catastrophic no-op that only surfaces as
+    flat-zero eval F1 hours later. Probe a single non-empty row up front
+    instead of discovering this after a full ``.map``.
+    """
+    for row in split:
+        text = row.get("text") or ""
+        if not text.strip():
+            continue
+        _, offsets = _split_words_with_offsets(text, words_splitter)
+        if offsets and all(s < 0 or e < 0 for (s, e) in offsets):
+            raise ValueError(
+                "words_splitter produced no character offsets for a non-empty "
+                "row, so every span would be silently dropped and the model "
+                "would train on empty labels. Pass the model's own "
+                "`model.data_processor.words_splitter`, which yields "
+                "(token, start, end) triples — not a bare-token splitter."
+            )
+        return  # one valid probe is enough
+
+
 def _spans_for_window(
     spans: list[dict],
     offsets: list[tuple[int, int]],
@@ -307,6 +334,8 @@ def to_native_dataset(
             raise ValueError(
                 f"stride={stride} must be < max_words={max_words}"
             )
+
+    _assert_offsets_available(split, words_splitter)
 
     def _batch(batch: dict) -> dict:
         out: dict[str, list] = {k: [] for k in batch}

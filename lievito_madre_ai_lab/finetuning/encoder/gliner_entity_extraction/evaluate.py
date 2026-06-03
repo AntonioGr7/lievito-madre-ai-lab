@@ -115,6 +115,94 @@ def evaluate_split(
     return score_predictions(pred_per_text, gold_per_text, labels=labels)
 
 
+def _scored_predictions(
+    model,
+    dataset,
+    labels: list[str],
+    *,
+    min_threshold: float,
+    batch_size: int,
+    label_aliases: dict[str, str] | None,
+) -> tuple[list[list[dict]], list[list[dict]]]:
+    """Run inference once at *min_threshold* and return (preds_with_scores, gold).
+
+    Shared by :func:`tune_threshold` so a full threshold sweep pays for
+    inference exactly once: every candidate threshold just re-filters the
+    cached spans by their ``score``.
+    """
+    aliases = label_aliases or {}
+    reverse = {v: k for k, v in aliases.items()}
+    prompt_labels = [aliases.get(lbl, lbl) for lbl in labels]
+
+    texts = [row["text"] for row in dataset]
+    gold_per_text = [list(row["spans"]) for row in dataset]
+
+    pred_per_text: list[list[dict]] = []
+    for start in range(0, len(texts), batch_size):
+        chunk = texts[start : start + batch_size]
+        batch = model.inference(chunk, prompt_labels, threshold=min_threshold)
+        for spans in batch:
+            pred_per_text.append([
+                {
+                    "start": int(s["start"]),
+                    "end": int(s["end"]),
+                    "label": reverse.get(s["label"], s["label"]),
+                    "score": float(s.get("score", 1.0)),
+                }
+                for s in spans
+            ])
+    return pred_per_text, gold_per_text
+
+
+def tune_threshold(
+    model,
+    dataset,
+    labels: list[str],
+    *,
+    thresholds: list[float] | None = None,
+    batch_size: int = 16,
+    label_aliases: dict[str, str] | None = None,
+    min_threshold: float = 0.05,
+) -> tuple[float, dict[str, float], list[dict[str, float]]]:
+    """Sweep decision thresholds on *dataset* and return the micro-F1 optimum.
+
+    GLiNER's default 0.5 cutoff is rarely F1-optimal — PII especially is
+    recall-sensitive, so the best operating point usually sits lower. We run
+    inference once at ``min_threshold`` (capturing low-score spans) and then
+    re-threshold the cached scored spans for each candidate, so the whole
+    sweep costs a single inference pass.
+
+    Returns ``(best_threshold, best_metrics, curve)`` where ``curve`` is a list
+    of ``{"threshold", "precision", "recall", "f1"}`` dicts (handy for logging
+    a PR trade-off table). Ties on F1 resolve to the *higher* threshold, which
+    favours precision at equal F1.
+    """
+    if thresholds is None:
+        thresholds = [round(0.05 * i, 2) for i in range(1, 19)]  # 0.05 .. 0.90
+    thresholds = sorted(t for t in thresholds if t >= min_threshold) or [min_threshold]
+
+    preds, gold = _scored_predictions(
+        model, dataset, labels,
+        min_threshold=min_threshold, batch_size=batch_size, label_aliases=label_aliases,
+    )
+
+    curve: list[dict[str, float]] = []
+    best: dict[str, float] | None = None
+    for t in thresholds:
+        filtered = [[s for s in spans if s["score"] >= t] for spans in preds]
+        m = score_predictions(filtered, gold)
+        row = {
+            "threshold": t,
+            "precision": m["precision"], "recall": m["recall"], "f1": m["f1"],
+        }
+        curve.append(row)
+        # >= so that, on an F1 tie, the higher (later) threshold wins.
+        if best is None or row["f1"] >= best["f1"]:
+            best = row
+    assert best is not None  # thresholds is non-empty after filtering
+    return best["threshold"], best, curve
+
+
 def build_eval_callback(
     eval_dataset,
     train_types: list[str],

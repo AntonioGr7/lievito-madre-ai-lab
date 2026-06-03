@@ -35,38 +35,50 @@ class PeftConfig:
 _DEBERTA_V3_LORA_TARGETS = ["query_proj", "key_proj", "value_proj", "dense"]
 
 
-def _find_hf_encoder(model):
-    """Locate the HuggingFace ``PreTrainedModel`` buried inside GLiNER.
+def _find_hf_encoders(model) -> list:
+    """Locate every top-level HuggingFace ``PreTrainedModel`` inside GLiNER.
 
-    GLiNER wraps the encoder several levels deep::
+    Uni-encoder GLiNER wraps a single encoder several levels deep::
 
         model (outer GLiNER wrapper)
           .model                -> UniEncoderSpanModel / sibling
-            .token_rep_layer    -> Encoder / BiEncoder
+            .token_rep_layer    -> Encoder
               .bert_layer       -> Transformer
                 .model          -> HF PreTrainedModel  (GC lives here)
 
+    Bi-encoder variants (e.g. ``modern-gliner-bi-*``) carry **two** encoders —
+    a text encoder and a separate label encoder — and HF Trainer's single
+    ``gradient_checkpointing_enable`` call on the outer wrapper must reach both
+    or one of them silently trains without checkpointing (and, worse, with the
+    wrong ``use_cache`` / ``input_require_grads`` state). The attribute path
+    also differs across uni/bi variants and gliner releases, so we scan the
+    module tree for ``PreTrainedModel`` instances rather than hard-coding it.
+
     PEFT, when enabled in :func:`load_gliner`, wraps ``model.model`` with a
-    ``PeftModel`` whose attribute access forwards to the wrapped module, so
-    the same path still resolves.
+    ``PeftModel`` whose ``named_modules`` still includes the wrapped encoder,
+    so the scan resolves through it.
+
+    Returns the *top-level* matches only: if a ``PreTrainedModel`` is nested
+    inside another (rare), the outer one's GC hook already covers it.
     """
-    cur = getattr(model, "model", None)
-    for attr in ("token_rep_layer", "bert_layer", "model"):
-        if cur is None:
-            break
-        cur = getattr(cur, attr, None)
-    if cur is not None and hasattr(cur, "gradient_checkpointing_enable"):
-        return cur
-    # Fallback: if a future GLiNER release moves things, accept any nn.Module
-    # along the chain that exposes the method.
-    for candidate in (getattr(model, "model", None),):
-        if candidate is not None and hasattr(candidate, "gradient_checkpointing_enable"):
-            return candidate
-    raise AttributeError(
-        "Could not locate a PreTrainedModel under the GLiNER wrapper for "
-        "gradient checkpointing. Looked at "
-        "model.model.token_rep_layer.bert_layer.model and model.model."
-    )
+    from transformers import PreTrainedModel
+
+    inner = getattr(model, "model", None)
+    if inner is None:
+        return []
+
+    matches: list[tuple[str, Any]] = [
+        (name, module)
+        for name, module in inner.named_modules()
+        if isinstance(module, PreTrainedModel)
+        and hasattr(module, "gradient_checkpointing_enable")
+    ]
+    tops = [
+        module
+        for name, module in matches
+        if not any(other != name and name.startswith(other + ".") for other, _ in matches)
+    ]
+    return tops
 
 
 def _retarget_span_rep_max_width(model, new_max_width: int) -> None:
@@ -120,30 +132,39 @@ def _attach_gradient_checkpointing(model) -> None:
 
     HF Trainer calls ``self.model.gradient_checkpointing_enable(...)`` on the
     outer GLiNER wrapper, which is a plain ``nn.Module``. We attach thin
-    delegates that forward to the underlying HF encoder, disable ``use_cache``
-    (incompatible with GC), and call ``enable_input_require_grads`` so that
-    when LoRA is in play autograd still reaches the adapters through the
-    frozen embedding table.
+    delegates that forward to *every* underlying HF encoder (one for
+    uni-encoder, two for bi-encoder), disable ``use_cache`` (incompatible with
+    GC), and call ``enable_input_require_grads`` so that when LoRA is in play
+    autograd still reaches the adapters through the frozen embedding table.
     """
     def _enable(self, gradient_checkpointing_kwargs=None):
-        inner = _find_hf_encoder(self)
-        if gradient_checkpointing_kwargs is None:
-            inner.gradient_checkpointing_enable()
-        else:
-            inner.gradient_checkpointing_enable(
-                gradient_checkpointing_kwargs=gradient_checkpointing_kwargs
+        encoders = _find_hf_encoders(self)
+        if not encoders:
+            raise AttributeError(
+                "Could not locate any PreTrainedModel under the GLiNER wrapper "
+                "for gradient checkpointing. Scanned model.model.named_modules() "
+                "for transformers.PreTrainedModel instances and found none — "
+                "either disable gradient_checkpointing in the config or report "
+                "the GLiNER variant so the scan can be extended."
             )
-        if hasattr(inner, "config"):
-            inner.config.use_cache = False
-        if hasattr(inner, "enable_input_require_grads"):
-            inner.enable_input_require_grads()
+        for inner in encoders:
+            if gradient_checkpointing_kwargs is None:
+                inner.gradient_checkpointing_enable()
+            else:
+                inner.gradient_checkpointing_enable(
+                    gradient_checkpointing_kwargs=gradient_checkpointing_kwargs
+                )
+            if hasattr(inner, "config"):
+                inner.config.use_cache = False
+            if hasattr(inner, "enable_input_require_grads"):
+                inner.enable_input_require_grads()
 
     def _disable(self):
-        inner = _find_hf_encoder(self)
-        if hasattr(inner, "gradient_checkpointing_disable"):
-            inner.gradient_checkpointing_disable()
-        if hasattr(inner, "config"):
-            inner.config.use_cache = True
+        for inner in _find_hf_encoders(self):
+            if hasattr(inner, "gradient_checkpointing_disable"):
+                inner.gradient_checkpointing_disable()
+            if hasattr(inner, "config"):
+                inner.config.use_cache = True
 
     model.gradient_checkpointing_enable = types.MethodType(_enable, model)
     model.gradient_checkpointing_disable = types.MethodType(_disable, model)

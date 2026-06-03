@@ -44,14 +44,13 @@ class GLiNERPredictor:
         max_length: int = 512,
         max_words: Any = _UNSET,
         stride: Any = _UNSET,
-        default_threshold: float = 0.5,
+        default_threshold: Any = _UNSET,
         merge_lora_on_load: bool = True,
     ) -> None:
         from gliner import GLiNER
 
         self.batch_size = batch_size
         self.max_length = max_length
-        self.default_threshold = default_threshold
         self.device = _resolve_device(device)
 
         # Discover chunking settings recorded at training time. Caller args
@@ -63,6 +62,11 @@ class GLiNERPredictor:
             max_words = meta.get("max_words")
         if stride is _UNSET:
             stride = meta.get("stride")
+        # Default the decision threshold to the validation-tuned value the
+        # train script persisted; fall back to 0.5 only when absent.
+        if default_threshold is _UNSET:
+            default_threshold = meta.get("threshold", 0.5)
+        self.default_threshold = float(default_threshold)
         if not meta:
             log.warning(
                 "no preprocessing.json in %s — long-input chunking will fall "
@@ -310,7 +314,13 @@ if __name__ == "__main__":
     parser.add_argument("texts", nargs="*")
     parser.add_argument("--device", default=None)
     parser.add_argument("--batch-size", type=int, default=16)
-    parser.add_argument("--threshold", type=float, default=0.5)
+    parser.add_argument(
+        "--threshold", type=float, default=None,
+        help=(
+            "Decision threshold. Defaults to the validation-tuned value "
+            "recorded in preprocessing.json at training time (or 0.5 if absent)."
+        ),
+    )
     parser.add_argument("--labels", nargs="*", default=None)
     parser.add_argument("--no-compile", action="store_true")
     parser.add_argument("--no-merge-lora", action="store_true")
@@ -340,6 +350,8 @@ if __name__ == "__main__":
         overrides["max_words"] = args.max_words
     if args.stride is not None:
         overrides["stride"] = None if args.stride < 0 else args.stride
+    if args.threshold is not None:
+        overrides["default_threshold"] = args.threshold
 
     predictor = GLiNERPredictor(
         args.model_dir,
@@ -347,7 +359,6 @@ if __name__ == "__main__":
         batch_size=args.batch_size,
         use_compile=not args.no_compile,
         quantize_cpu=args.quantize,
-        default_threshold=args.threshold,
         merge_lora_on_load=not args.no_merge_lora,
         **overrides,
     )

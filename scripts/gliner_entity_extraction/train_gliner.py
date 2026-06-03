@@ -27,7 +27,10 @@ from lievito_madre_ai_lab.finetuning.encoder.gliner_entity_extraction.dataset im
     load_processed,
     to_native_dataset,
 )
-from lievito_madre_ai_lab.finetuning.encoder.gliner_entity_extraction.evaluate import evaluate_split
+from lievito_madre_ai_lab.finetuning.encoder.gliner_entity_extraction.evaluate import (
+    evaluate_split,
+    tune_threshold,
+)
 from lievito_madre_ai_lab.finetuning.encoder.gliner_entity_extraction.model import (
     PeftConfig,
     load_gliner,
@@ -200,32 +203,72 @@ def main() -> None:
         if train_cfg.chunk_max_words is not None
         else int(getattr(model.config, "max_len", 384))
     )
+    native_max_words = effective_max_words if train_cfg.chunk_stride >= 0 else None
+
+    # Tune the decision threshold on validation before final eval. GLiNER's
+    # default 0.5 is rarely F1-optimal; we pick the validation-optimal cutoff,
+    # report the final test numbers at it, and persist it so the predictor
+    # (serve.py) defaults to the same operating point. Falls back to 0.5 when
+    # there is no validation split to tune on.
+    eval_threshold = 0.5
+    threshold_curve: list[dict] = []
+    if "validation" in datasets and len(datasets["validation"]):
+        val_for_tuning = to_native_dataset(
+            datasets["validation"],
+            model.data_processor.words_splitter,
+            max_words=native_max_words,
+            stride=train_cfg.chunk_stride,
+            desc="Chunking validation for threshold tuning",
+        )
+        eval_threshold, best_m, threshold_curve = tune_threshold(
+            model, val_for_tuning, labels=train_types,
+            label_aliases=label_aliases,
+            batch_size=cfg.per_device_eval_batch_size,
+        )
+        f1_at_half = next(
+            (r["f1"] for r in threshold_curve if r["threshold"] == 0.5), None
+        )
+        baseline = f"{f1_at_half:.4f}" if f1_at_half is not None else "n/a"
+        print(
+            f"      tuned decision threshold = {eval_threshold} "
+            f"(val f1={best_m['f1']:.4f} P={best_m['precision']:.4f} "
+            f"R={best_m['recall']:.4f}; default 0.5 → f1={baseline})"
+        )
+
     prep_meta = load_preprocessing_meta(cfg.processed_dir) or {}
-    save_preprocessing_meta(
-        final_dir,
+    # Merge into one dict (not **prep_meta + explicit kwargs) so the train-time
+    # values *override* the prep-time ones: the prep scripts already write
+    # train_types/holdout_types into preprocessing.json, and `f(**d, train_types=...)`
+    # with the key in both `d` and the call would raise "multiple values".
+    meta_out = {
         **prep_meta,            # carry over anything the prep script recorded
-        tokenizer=cfg.model_name,
-        max_words=effective_max_words,
-        stride=train_cfg.chunk_stride if train_cfg.chunk_stride >= 0 else None,
-        train_types=train_types,
-        holdout_types=holdout_types,
-    )
+        "tokenizer": cfg.model_name,
+        "max_words": effective_max_words,
+        "stride": train_cfg.chunk_stride if train_cfg.chunk_stride >= 0 else None,
+        "threshold": eval_threshold,
+        "train_types": train_types,
+        "holdout_types": holdout_types,
+    }
+    save_preprocessing_meta(final_dir, **meta_out)
     print(
         f"      preprocessing.json written to {final_dir} "
         f"(max_words={effective_max_words}, "
-        f"stride={train_cfg.chunk_stride if train_cfg.chunk_stride >= 0 else 'off'})"
+        f"stride={train_cfg.chunk_stride if train_cfg.chunk_stride >= 0 else 'off'}, "
+        f"threshold={eval_threshold})"
     )
     print(f"Model saved -> {final_dir}")
 
     print("[5/5] Final evaluation on the test split (model already saved) …")
-    metrics: dict = {}
+    metrics: dict = {"tuned_threshold": eval_threshold}
+    if threshold_curve:
+        metrics["threshold_curve"] = threshold_curve
     if "test" in datasets:
         # Mirror the same chunking the trainer used so final test f1 is
         # computed on the same units that ``eval_f1`` tracked during training.
         test_for_eval = to_native_dataset(
             datasets["test"],
             model.data_processor.words_splitter,
-            max_words=effective_max_words if train_cfg.chunk_stride >= 0 else None,
+            max_words=native_max_words,
             stride=train_cfg.chunk_stride,
             desc="Chunking test for final evaluation",
         )
@@ -233,6 +276,7 @@ def main() -> None:
         closed = evaluate_split(
             model, test_for_eval, labels=train_types,
             label_aliases=label_aliases,
+            threshold=eval_threshold,
             batch_size=cfg.per_device_eval_batch_size,
         )
         for k, v in closed.items():
@@ -246,6 +290,7 @@ def main() -> None:
             zero = evaluate_split(
                 model, test_for_eval, labels=holdout_types,
                 label_aliases=label_aliases,
+                threshold=eval_threshold,
                 batch_size=cfg.per_device_eval_batch_size,
             )
             for k, v in zero.items():
