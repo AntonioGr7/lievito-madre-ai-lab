@@ -16,6 +16,8 @@ import torch.nn as nn
 
 from lievito_madre_ai_lab.finetuning.encoder.gliner_entity_extraction.dataset import (
     _split_words_with_offsets,
+    build_label_prompt_map,
+    invert_prompt_map,
 )
 from lievito_madre_ai_lab.shared.preprocessing import load_preprocessing_meta
 
@@ -103,7 +105,6 @@ class GLiNERPredictor:
         self.train_types: list[str] = list(getattr(model.config, "train_types", []) or [])
         self.holdout_types: list[str] = list(getattr(model.config, "holdout_types", []) or [])
         self.label_aliases: dict[str, str] = dict(getattr(model.config, "label_aliases", {}) or {})
-        self._reverse_aliases = {v: k for k, v in self.label_aliases.items()}
 
         if quantize_cpu and self.device.type == "cpu":
             from torch.ao.quantization import default_dynamic_qconfig, quantize_dynamic
@@ -167,7 +168,12 @@ class GLiNERPredictor:
                 "no labels available: pass labels=... or load a model with "
                 "train_types stamped on its config"
             )
-        prompt_labels = [self.label_aliases.get(lbl, lbl) for lbl in canonical_labels]
+        # Same canonical→prompt mapping used at train/eval time: explicit
+        # aliases win, else the auto-humanized form. Predictions come back in
+        # prompt space and are un-aliased to canonical via the inverse map.
+        prompt_map = build_label_prompt_map(canonical_labels, self.label_aliases)
+        prompt_labels = [prompt_map[lbl] for lbl in canonical_labels]
+        reverse = invert_prompt_map(prompt_map)
         thr = self.default_threshold if threshold is None else threshold
 
         order = sorted(range(len(texts)), key=lambda i: len(texts[i]), reverse=True)
@@ -176,7 +182,7 @@ class GLiNERPredictor:
         sorted_results: list[list[dict]] = []
         for start in range(0, len(sorted_texts), self.batch_size):
             chunk = sorted_texts[start : start + self.batch_size]
-            sorted_results.extend(self._forward(chunk, prompt_labels, thr))
+            sorted_results.extend(self._forward(chunk, prompt_labels, thr, reverse))
 
         out: list[list[dict] | None] = [None] * len(texts)
         for rank, orig_idx in enumerate(order):
@@ -193,7 +199,10 @@ class GLiNERPredictor:
         return self.predict([text], labels=labels, threshold=threshold)[0]
 
     @torch.inference_mode()
-    def _forward(self, texts: list[str], labels: list[str], threshold: float) -> list[list[dict]]:
+    def _forward(
+        self, texts: list[str], labels: list[str], threshold: float,
+        reverse: dict[str, str] | None = None,
+    ) -> list[list[dict]]:
         # If chunking is on, fan out each text into overlapping word-windows
         # — matching the training-time policy. Each chunk's char offsets are
         # shifted back to the original text before merging.
@@ -234,11 +243,12 @@ class GLiNERPredictor:
         # Shift each chunk's spans back into original-text coords and group
         # by source text. Same-label spans that overlap (one entity seen at
         # the tail of one chunk and the head of the next) get merged below.
+        reverse = reverse or {}
         per_text: list[list[dict]] = [[] for _ in texts]
         for raw, (src_idx, shift) in zip(raw_batches, chunk_meta):
             for r in raw:
                 per_text[src_idx].append({
-                    "label": self._reverse_aliases.get(r["label"], r["label"]),
+                    "label": reverse.get(r["label"], r["label"]),
                     "text":  r["text"],
                     "start": int(r["start"]) + shift,
                     "end":   int(r["end"]) + shift,

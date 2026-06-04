@@ -167,10 +167,22 @@ def build_trainer(
         build_eval_callback,
     )
     from lievito_madre_ai_lab.finetuning.encoder.gliner_entity_extraction.dataset import (
+        build_label_prompt_map,
         to_native_dataset,
     )
 
     eval_split = "validation" if "validation" in datasets else "test"
+
+    # Train on the same natural-language prompt strings the model is queried
+    # with at eval/serve time. Built over train ∪ holdout so every label maps
+    # the same way regardless of split; explicit config aliases override the
+    # auto-humanized default. Applied only to the `ner` training signal — the
+    # char-offset `spans` the eval callback consumes stay canonical.
+    aliases = getattr(model.config, "label_aliases", {}) or {}
+    all_label_types = list(train_types) + list(
+        getattr(model.config, "holdout_types", []) or []
+    )
+    label_prompts = build_label_prompt_map(all_label_types, aliases)
 
     # Char-offset rows → GLiNER native (tokenized_text + ner). When chunking
     # is on (stride >= 0), all splits get sliced into overlapping windows so
@@ -196,6 +208,7 @@ def build_trainer(
         native_datasets[name] = to_native_dataset(
             split, splitter,
             max_words=max_words, stride=stride,
+            label_prompts=label_prompts,
             desc=f"Converting {name} -> GLiNER native"
                  + (f" (chunk≤{max_words}, stride={stride})" if chunking_enabled else ""),
         )

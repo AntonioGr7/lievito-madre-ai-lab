@@ -12,6 +12,11 @@ from __future__ import annotations
 
 from typing import Any
 
+from lievito_madre_ai_lab.finetuning.encoder.gliner_entity_extraction.dataset import (
+    build_label_prompt_map,
+    invert_prompt_map,
+)
+
 
 def _prf(tp: int, fp: int, fn: int) -> tuple[float, float, float]:
     precision = tp / (tp + fp) if (tp + fp) else 0.0
@@ -90,12 +95,20 @@ def evaluate_split(
     from aliased labels; predictions are un-aliased before scoring so the
     per-label breakdown uses canonical names.
     """
-    aliases = label_aliases or {}
-    reverse = {v: k for k, v in aliases.items()}
-    prompt_labels = [aliases.get(lbl, lbl) for lbl in labels]
+    prompt_map = build_label_prompt_map(labels, label_aliases)
+    reverse = invert_prompt_map(prompt_map)
+    prompt_labels = [prompt_map[lbl] for lbl in labels]
 
+    # Restrict gold to the labels under evaluation. The test split is prepared
+    # with the *full* label vocabulary, but a closed-set pass prompts only
+    # `train_types` (and a zero-shot pass only `holdout_types`). Without this
+    # filter, every gold span outside the prompted set becomes a false negative
+    # — silently deflating both closed-set and zero-shot F1.
+    label_set = set(labels)
     texts = [row["text"] for row in dataset]
-    gold_per_text = [list(row["spans"]) for row in dataset]
+    gold_per_text = [
+        [s for s in row["spans"] if s["label"] in label_set] for row in dataset
+    ]
 
     pred_per_text: list[list[dict]] = []
     for start in range(0, len(texts), batch_size):
@@ -130,12 +143,17 @@ def _scored_predictions(
     inference exactly once: every candidate threshold just re-filters the
     cached spans by their ``score``.
     """
-    aliases = label_aliases or {}
-    reverse = {v: k for k, v in aliases.items()}
-    prompt_labels = [aliases.get(lbl, lbl) for lbl in labels]
+    prompt_map = build_label_prompt_map(labels, label_aliases)
+    reverse = invert_prompt_map(prompt_map)
+    prompt_labels = [prompt_map[lbl] for lbl in labels]
 
+    # Same gold restriction as evaluate_split — keep the sweep consistent with
+    # the metric it's tuning for (see the note there).
+    label_set = set(labels)
     texts = [row["text"] for row in dataset]
-    gold_per_text = [list(row["spans"]) for row in dataset]
+    gold_per_text = [
+        [s for s in row["spans"] if s["label"] in label_set] for row in dataset
+    ]
 
     pred_per_text: list[list[dict]] = []
     for start in range(0, len(texts), batch_size):

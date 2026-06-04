@@ -18,8 +18,67 @@ two type files written alongside it.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
+
+
+# --- label → natural-language prompt --------------------------------------
+#
+# GLiNER's label encoder reads entity-type strings as natural language, so a
+# prompt like "medical record number" embeds far better than the raw
+# identifier "medical_record_number". The same prompt must be used at *train*,
+# *eval*, and *serve* time or the model is trained on one string and queried
+# with another — so these helpers are the single source of truth shared by all
+# three paths.
+
+_CAMEL_BOUNDARY = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
+_WS = re.compile(r"\s+")
+
+
+def humanize_label(label: str) -> str:
+    """Derive a natural-language prompt from a canonical label identifier.
+
+    Generic by design (no per-dataset table): ``snake_case`` / ``kebab-case``
+    underscores and hyphens become spaces, ``camelCase`` / ``PascalCase``
+    boundaries are split, and the result is lower-cased and whitespace-collapsed.
+
+        first_name             -> "first name"
+        medical_record_number  -> "medical record number"
+        swift_bic              -> "swift bic"
+        driverLicenseNumber    -> "driver license number"
+
+    Concatenated all-caps identifiers carry no boundary to split on
+    (``GIVENNAME`` -> ``"givenname"``); supply an explicit alias for those.
+    Returns the original label if humanization would empty it.
+    """
+    s = label.replace("_", " ").replace("-", " ")
+    s = _CAMEL_BOUNDARY.sub(" ", s)
+    s = _WS.sub(" ", s).strip().lower()
+    return s or label
+
+
+def build_label_prompt_map(
+    labels: list[str], aliases: dict[str, str] | None = None
+) -> dict[str, str]:
+    """Map each canonical label → the prompt string the model should encode.
+
+    An explicit, non-empty entry in *aliases* always wins; otherwise the prompt
+    is :func:`humanize_label`. Deterministic per label, so the map is identical
+    whether built over the train set, the holdout set, or their union — which
+    is what keeps train/eval/serve consistent.
+    """
+    aliases = aliases or {}
+    return {lbl: (aliases.get(lbl) or humanize_label(lbl)) for lbl in labels}
+
+
+def invert_prompt_map(prompt_map: dict[str, str]) -> dict[str, str]:
+    """Invert a canonical→prompt map to prompt→canonical for un-aliasing
+    predictions. On a prompt collision the first canonical label wins."""
+    reverse: dict[str, str] = {}
+    for canonical, prompt in prompt_map.items():
+        reverse.setdefault(prompt, canonical)
+    return reverse
 
 
 def validate_row(row: dict[str, Any]) -> list[str]:
@@ -171,6 +230,7 @@ def _spans_for_window(
     offsets: list[tuple[int, int]],
     start_tok: int,
     end_tok: int,
+    label_prompts: dict[str, str] | None = None,
 ) -> list[list]:
     """Compute the ``ner`` list for the word-token window ``[start_tok, end_tok)``.
 
@@ -179,11 +239,17 @@ def _spans_for_window(
     Spans that *straddle* the window boundary are clipped to the visible
     tokens — the same span may then appear (clipped) in the next overlapping
     chunk, which is the whole point of stride > 0.
+
+    When *label_prompts* is given, each emitted ``ner`` label is mapped through
+    it so the model is *trained* on the same prompt string it is queried with
+    at eval/serve time.
     """
     out: list[list] = []
     window_offsets = offsets[start_tok:end_tok]
     for span in spans:
         s_char, e_char, label = int(span["start"]), int(span["end"]), span["label"]
+        if label_prompts is not None:
+            label = label_prompts.get(label, label)
         first_local: int | None = None
         last_local: int | None = None
         for i, (ts, te) in enumerate(window_offsets):
@@ -205,6 +271,7 @@ def chunk_to_gliner_native(
     *,
     max_words: int,
     stride: int,
+    label_prompts: dict[str, str] | None = None,
 ) -> list[dict]:
     """Char-offset row → list of self-contained chunk rows.
 
@@ -234,7 +301,7 @@ def chunk_to_gliner_native(
     spans = row["spans"]
 
     if n <= max_words:
-        ner = _spans_for_window(spans, offsets, 0, n)
+        ner = _spans_for_window(spans, offsets, 0, n, label_prompts)
         return [{**row, "tokenized_text": tokens, "ner": ner}]
 
     step = max_words - stride
@@ -242,7 +309,7 @@ def chunk_to_gliner_native(
     start = 0
     while True:
         end = min(start + max_words, n)
-        ner = _spans_for_window(spans, offsets, start, end)
+        ner = _spans_for_window(spans, offsets, start, end, label_prompts)
 
         # Self-contained chunk: slice the text to the char range covered by
         # this window's words (keeping whitespace/punctuation between them)
@@ -277,7 +344,9 @@ def chunk_to_gliner_native(
     return out
 
 
-def to_gliner_native(row: dict, words_splitter) -> dict:
+def to_gliner_native(
+    row: dict, words_splitter, label_prompts: dict[str, str] | None = None
+) -> dict:
     """Convert a char-offset row → GLiNER's native training format.
 
     Input row::
@@ -297,7 +366,7 @@ def to_gliner_native(row: dict, words_splitter) -> dict:
     so there is no tokenization drift between training and inference.
     """
     tokens, offsets = _split_words_with_offsets(row["text"], words_splitter)
-    ner = _spans_for_window(row["spans"], offsets, 0, len(tokens))
+    ner = _spans_for_window(row["spans"], offsets, 0, len(tokens), label_prompts)
     return {"tokenized_text": tokens, "ner": ner}
 
 
@@ -308,6 +377,7 @@ def to_native_dataset(
     max_words: int | None = None,
     stride: int = -1,
     desc: str | None = None,
+    label_prompts: dict[str, str] | None = None,
 ):
     """Convert a char-offset ``Dataset`` to the GLiNER native format.
 
@@ -347,9 +417,10 @@ def to_native_dataset(
                 chunks = chunk_to_gliner_native(
                     row, words_splitter,
                     max_words=max_words, stride=stride,
+                    label_prompts=label_prompts,
                 )
             else:
-                native = to_gliner_native(row, words_splitter)
+                native = to_gliner_native(row, words_splitter, label_prompts)
                 chunks = [{**row, **native}]
             for chunk in chunks:
                 for k in batch:

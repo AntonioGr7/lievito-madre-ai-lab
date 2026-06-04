@@ -12,6 +12,11 @@ from lievito_madre_ai_lab.finetuning.encoder.gliner_entity_extraction.dataset im
     validate_row,
     partition_entity_types,
     collect_entity_types,
+    humanize_label,
+    build_label_prompt_map,
+    invert_prompt_map,
+    to_gliner_native,
+    chunk_to_gliner_native,
 )
 
 
@@ -108,3 +113,65 @@ def test_load_processed_invalid_row_raises(tmp_path):
     (tmp_path / "train_types.json").write_text('["X"]')
     with pytest.raises(ValueError, match="end > start"):
         load_processed(tmp_path)
+
+
+# --- label → prompt mapping ----------------------------------------------
+
+@pytest.mark.parametrize("label,expected", [
+    ("first_name", "first name"),
+    ("medical_record_number", "medical record number"),
+    ("swift_bic", "swift bic"),
+    ("driverLicenseNumber", "driver license number"),
+    ("PascalCase", "pascal case"),
+    ("kebab-case-label", "kebab case label"),
+    ("age", "age"),
+    ("GIVENNAME", "givenname"),   # all-caps concat has no boundary to split on
+])
+def test_humanize_label(label, expected):
+    assert humanize_label(label) == expected
+
+
+def test_build_label_prompt_map_explicit_alias_wins():
+    m = build_label_prompt_map(["first_name", "GIVENNAME"], {"GIVENNAME": "given name"})
+    assert m == {"first_name": "first name", "GIVENNAME": "given name"}
+
+
+def test_build_label_prompt_map_empty_alias_falls_back_to_humanize():
+    m = build_label_prompt_map(["first_name"], {"first_name": ""})
+    assert m == {"first_name": "first name"}
+
+
+def test_invert_prompt_map_round_trips():
+    m = build_label_prompt_map(["first_name", "GIVENNAME"], {"GIVENNAME": "given name"})
+    rev = invert_prompt_map(m)
+    assert rev == {"first name": "first_name", "given name": "GIVENNAME"}
+
+
+def _offset_splitter(text):
+    """Minimal words_splitter yielding (token, start, end) triples."""
+    out, i = [], 0
+    for tok in text.split():
+        start = text.index(tok, i)
+        out.append((tok, start, start + len(tok)))
+        i = start + len(tok)
+    return out
+
+
+def test_to_gliner_native_humanizes_ner_label():
+    row = {"text": "Bob here", "spans": [{"start": 0, "end": 3, "label": "first_name"}]}
+    prompts = build_label_prompt_map(["first_name"], {})
+    native = to_gliner_native(row, _offset_splitter, prompts)
+    # The training signal (`ner`) carries the prompt string, not the raw label.
+    assert native["ner"] == [[0, 0, "first name"]]
+
+
+def test_chunking_keeps_spans_canonical_but_ner_prompted():
+    row = {"text": "a b c d e", "spans": [{"start": 0, "end": 1, "label": "first_name"}]}
+    prompts = build_label_prompt_map(["first_name"], {})
+    chunks = chunk_to_gliner_native(
+        row, _offset_splitter, max_words=2, stride=1, label_prompts=prompts
+    )
+    # char-offset spans stay canonical (the eval callback un-aliases itself)…
+    assert all(s["label"] == "first_name" for c in chunks for s in c["spans"])
+    # …while the trainer-facing `ner` is in prompt space.
+    assert any(n[2] == "first name" for c in chunks for n in c["ner"])

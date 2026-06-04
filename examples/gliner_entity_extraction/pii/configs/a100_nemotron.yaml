@@ -103,7 +103,9 @@ gliner:
     # cap internally), re-enable with e.g. stride: 96 and max_words: <= max_len.
 
   # Nemotron labels are snake_case (first_name, medical_record_number, ...).
-  # GLiNER's label encoder reads them as natural language, so spelling them out
-  # (e.g. "medical record number") usually helps. Left empty here to keep the
-  # reference recipe corpus-agnostic — add the high-frequency ones for a boost.
+  # They are auto-humanized to natural-language prompts ("first name",
+  # "medical record number") at train, eval, AND serve time — consistently —
+  # so this can stay empty and still get the benefit. Add an entry only to
+  # override a label the generic humanizer can't split (e.g. concatenated
+  # all-caps like "GIVENNAME": "given name").
   label_aliases: {}
