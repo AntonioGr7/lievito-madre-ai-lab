@@ -34,6 +34,11 @@ class PeftConfig:
 # submodule names inside the disentangled-attention block.
 _DEBERTA_V3_LORA_TARGETS = ["query_proj", "key_proj", "value_proj", "dense"]
 
+# ModernBERT (used by modern-gliner-bi-*) fuses QKV into one ``Wqkv`` linear
+# and names the MLP projections ``Wi`` (in) / ``Wo`` (out); ``Wo`` also names
+# the attention output projection, so these three cover attention + MLP.
+_MODERNBERT_LORA_TARGETS = ["Wqkv", "Wi", "Wo"]
+
 
 def _find_hf_encoders(model) -> list:
     """Locate every top-level HuggingFace ``PreTrainedModel`` inside GLiNER.
@@ -175,15 +180,30 @@ def _resolve_lora_targets(model, requested) -> list[str]:
     if requested != "auto":
         return list(requested)
 
+    # The model_type can sit on the gliner wrapper's config or on a nested
+    # encoder config; scan a couple of likely spots so backbone detection works
+    # for both uni- and bi-encoder layouts.
+    model_type = None
+    for cfg in (
+        getattr(model, "config", None),
+        getattr(getattr(model, "model", None), "config", None),
+    ):
+        mt = getattr(cfg, "model_type", None)
+        if mt:
+            model_type = str(mt).lower()
+            break
+
     # Try peft's mapping first.
     try:
         from peft.utils.other import TRANSFORMERS_MODELS_TO_LORA_TARGET_MODULES_MAPPING
 
-        model_type = getattr(getattr(model, "config", None), "model_type", None)
         if model_type and model_type in TRANSFORMERS_MODELS_TO_LORA_TARGET_MODULES_MAPPING:
             return list(TRANSFORMERS_MODELS_TO_LORA_TARGET_MODULES_MAPPING[model_type])
     except Exception:
         pass
+
+    if model_type and "modernbert" in model_type:
+        return list(_MODERNBERT_LORA_TARGETS)
 
     return list(_DEBERTA_V3_LORA_TARGETS)
 

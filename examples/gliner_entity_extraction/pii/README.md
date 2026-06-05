@@ -51,7 +51,45 @@ python scripts/gliner_entity_extraction/train_gliner.py \
     --config examples/gliner_entity_extraction/pii/configs/a100_nemotron.yaml
 ```
 
-> **Smoke-test the bi-encoder first.** `a100_nemotron.yaml` is the only recipe that fine-tunes a *bi-encoder* backbone (two encoders), which exercises the multi-encoder gradient-checkpointing path. Do one short run with `--max-train-samples 200 --max-eval-samples 100 --max-test-samples 100` and confirm `eval_f1` climbs off zero before committing the GPU.
+## Smoke-test on a small GPU before the A100
+
+`a100_nemotron.yaml` is the only recipe that fine-tunes a *bi-encoder* backbone (two encoders + the multi-encoder gradient-checkpointing path), so validate the wiring cheaply before committing the A100. Work outward in tiers — each catches more, the last needs only ~4 GB.
+
+**Tier 0 — pure logic, no GPU (seconds).** Runs the fast unit suite (label humanization, threshold sweep, gold-filtering, dataset contract):
+
+```bash
+pip install pytest
+pytest tests/encoder/gliner_entity_extraction -q       # smoke tests stay skipped unless RUN_GLINER_SMOKE=1
+```
+
+**Tier 1 — full pipeline on the tiny fixture (<60 s, CPU or any GPU).** Exercises the whole train→tune-threshold→save→eval path end-to-end with a small uni-encoder, on the bundled fixture:
+
+```bash
+python scripts/gliner_entity_extraction/train_gliner.py \
+    --config examples/gliner_entity_extraction/pii/configs/smoke.yaml \
+    --max-train-samples 6 --max-eval-samples 2 --max-test-samples 2
+```
+
+**Tier 2 — the A100 code paths on 4 GB (a couple of minutes).** [`smoke_modern_bi.yaml`](configs/smoke_modern_bi.yaml) mirrors the A100 recipe (bi-encoder, chunking off, label humanization, gradient checkpointing) but on the smallest modern bi-encoder (`modern-gliner-bi-base`, 194M) with LoRA so it fits 4 GB. Prep a tiny streamed slice of Nemotron, then run:
+
+```bash
+# Tiny slice; empty holdout keeps prep from failing if a rare holdout label is absent.
+python examples/gliner_entity_extraction/pii/dataset/prepare_nemotron.py \
+    --out-dir data/processed/nemotron-smoke --limit 500 --holdout-types
+
+python scripts/gliner_entity_extraction/train_gliner.py \
+    --config examples/gliner_entity_extraction/pii/configs/smoke_modern_bi.yaml \
+    --max-train-samples 25 --max-eval-samples 20 --max-test-samples 20
+
+# And the baseline script (loads the base model zero-shot — inference only, fits easily):
+python scripts/gliner_entity_extraction/baseline_zeroshot.py \
+    --config examples/gliner_entity_extraction/pii/configs/smoke_modern_bi.yaml \
+    --max-eval-samples 20 --max-test-samples 20
+```
+
+What "green" looks like: training reaches the save step without an OOM or a gradient-checkpointing `AttributeError`, `eval_f1` is printed (it'll be low — that's fine, it's 25 samples), a tuned threshold is logged, and `outputs/_smoke_modern_bi/smoke/final/test_metrics.json` is written. Then scale to `a100_nemotron.yaml` (full FT, large backbone) with confidence.
+
+> **Troubleshooting 4 GB:** if you hit OOM, drop `per_device_eval_batch_size` to 1 and `gliner.sampling.max_types` to 12. If loss goes `NaN`, your card is likely Turing (fp16-only) and ModernBERT dislikes fp16 — set `precision: fp32` (tighter on memory) or run this tier on CPU; the A100 itself uses bf16 and is unaffected. Tier 2 covers everything except full-FT optimizer memory, which only the A100 run can exercise.
 
 ## Label prompts (natural-language entity types)
 

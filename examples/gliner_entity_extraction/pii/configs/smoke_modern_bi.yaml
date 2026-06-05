@@ -1,0 +1,84 @@
+# 4 GB smoke test for the A100 (a100_nemotron.yaml) CODE PATHS — NOT a quality run.
+#
+# Exercises everything the A100 recipe relies on, at a size that fits 4 GB:
+#   - bi-encoder backbone            -> multi-encoder gradient-checkpointing path
+#   - chunking OFF (stride: -1)      -> same conversion path as the A100 config
+#   - snake_case labels              -> auto-humanized prompts at train/eval/serve
+#   - validation threshold tuning + save-before-eval + test_metrics.json
+#
+# Uses the SMALLEST modern bi-encoder (base, 194M text encoder) + LoRA so a
+# 194M backbone trains on 4 GB. The A100 recipe is full-FT on the *large*
+# model — the only thing this smoke can't reproduce is full-FT optimizer
+# memory (a scaling concern, not a correctness one).
+#
+# Pair with tiny sample caps, e.g.:
+#   python scripts/gliner_entity_extraction/train_gliner.py \
+#       --config examples/gliner_entity_extraction/pii/configs/smoke_modern_bi.yaml \
+#       --max-train-samples 25 --max-eval-samples 20 --max-test-samples 20
+
+processed_dir: data/processed/nemotron-smoke
+model_name: knowledgator/modern-gliner-bi-base-v1.0
+output_dir: outputs/_smoke_modern_bi
+experiment_id: smoke
+
+num_train_epochs: 1
+max_steps: 10                  # cap steps so it finishes in a couple of minutes
+per_device_train_batch_size: 1
+per_device_eval_batch_size: 2
+gradient_accumulation_steps: 2
+learning_rate: 1e-5
+weight_decay: 0.01
+warmup_ratio: 0.0
+max_grad_norm: 1.0
+lr_scheduler_type: linear
+optim: adamw_torch
+seed: 42
+
+eval_strategy: steps
+eval_steps: 5
+save_strategy: steps
+save_steps: 10
+load_best_model_at_end: false
+metric_for_best_model: eval_f1
+greater_is_better: true
+save_total_limit: 1
+early_stopping_patience: null
+eval_accumulation_steps: null
+
+precision: auto                # bf16 on Ampere 4 GB (e.g. RTX 3050); fp16 on Turing (GTX 1650)
+gradient_checkpointing: true   # exercises the new bi-encoder GC discovery
+torch_compile: false
+train_sampling_strategy: random
+dataloader_num_workers: 0
+pad_to_multiple_of: 8
+
+logging_steps: 1
+report_to: "none"
+wandb_project: null
+wandb_run_name: null
+wandb_tags: []
+wandb_notes: null
+
+gliner:
+  # max_span_width omitted — same as the A100 config (bi-encoder default).
+  loss:
+    funcs: ["focal"]
+    focal_alpha: 0.75
+    focal_gamma: 2.0
+    reduction: mean            # safe under fp16 (no GradScaler overflow)
+  sampling:
+    max_types: 20              # small to keep 4 GB memory + step time down
+    max_neg_type_ratio: 2.0
+    random_drop: 0.1
+  head_lr_multiplier: 5.0
+  peft:
+    enabled: true              # LoRA so a 194M bi-encoder fits 4 GB
+    r: 8
+    alpha: 16
+    dropout: 0.05
+    # ModernBERT linear names. The `auto` resolver now knows these too, but we
+    # pin them so the smoke never depends on backbone detection.
+    target_modules: ["Wqkv", "Wi", "Wo"]
+  chunking:
+    stride: -1                 # OFF — same path as the A100 config
+  label_aliases: {}            # snake_case auto-humanized ("first name", etc.)
