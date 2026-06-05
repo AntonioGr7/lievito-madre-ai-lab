@@ -208,10 +208,12 @@ def main() -> None:
     native_max_words = effective_max_words if train_cfg.chunk_stride >= 0 else None
 
     # Tune the decision threshold on validation before final eval. GLiNER's
-    # default 0.5 is rarely F1-optimal; we pick the validation-optimal cutoff,
+    # default 0.5 is rarely optimal; we pick the validation-optimal cutoff,
     # report the final test numbers at it, and persist it so the predictor
     # (serve.py) defaults to the same operating point. Falls back to 0.5 when
-    # there is no validation split to tune on.
+    # there is no validation split to tune on. ``threshold_objective`` chooses
+    # f1 (balanced) or f2 (recall-weighted — recommended for PII/redaction).
+    threshold_objective = str(gliner_raw.get("threshold_objective", "f1"))
     eval_threshold = 0.5
     threshold_curve: list[dict] = []
     if "validation" in datasets and len(datasets["validation"]):
@@ -226,16 +228,13 @@ def main() -> None:
             model, val_for_tuning, labels=train_types,
             label_aliases=label_aliases,
             batch_size=cfg.per_device_eval_batch_size,
+            objective=threshold_objective,
             progress=True,
         )
-        f1_at_half = next(
-            (r["f1"] for r in threshold_curve if r["threshold"] == 0.5), None
-        )
-        baseline = f"{f1_at_half:.4f}" if f1_at_half is not None else "n/a"
         print(
             f"      tuned decision threshold = {eval_threshold} "
-            f"(val f1={best_m['f1']:.4f} P={best_m['precision']:.4f} "
-            f"R={best_m['recall']:.4f}; default 0.5 → f1={baseline})"
+            f"(objective={threshold_objective}; val f1={best_m['f1']:.4f} "
+            f"f2={best_m['f2']:.4f} P={best_m['precision']:.4f} R={best_m['recall']:.4f})"
         )
 
     prep_meta = load_preprocessing_meta(cfg.processed_dir) or {}
@@ -262,7 +261,7 @@ def main() -> None:
     print(f"Model saved -> {final_dir}")
 
     print("[5/5] Final evaluation on the test split (model already saved) …")
-    metrics: dict = {"tuned_threshold": eval_threshold}
+    metrics: dict = {"tuned_threshold": eval_threshold, "threshold_objective": threshold_objective}
     if threshold_curve:
         metrics["threshold_curve"] = threshold_curve
     if "test" in datasets:

@@ -87,6 +87,9 @@ gliner:
 
   head_lr_multiplier: 5.0
 
+  # PII is recall-sensitive — tune the persisted threshold for F2, not F1.
+  threshold_objective: f2
+
   peft:
     enabled: false
 

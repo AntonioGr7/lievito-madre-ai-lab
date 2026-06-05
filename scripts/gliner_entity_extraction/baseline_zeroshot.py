@@ -59,6 +59,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--threshold", type=float, default=None,
                    help="Fixed decision threshold. If omitted, tune on validation "
                         "(same protocol the fine-tune uses).")
+    p.add_argument("--threshold-objective", choices=["f1", "f2"], default=None,
+                   help="What threshold tuning maximises: f1 (balanced) or f2 "
+                        "(recall-weighted, for PII). Default: the config's "
+                        "gliner.threshold_objective, else f1.")
     p.add_argument("--no-chunking", action="store_true",
                    help="Disable sliding-window chunking even if the config enables it.")
     p.add_argument("--device", default=None)
@@ -70,8 +74,8 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
-def _load_config(path: str) -> tuple[TrainConfig, dict, int, dict]:
-    """Return (cfg, label_aliases, chunk_stride, {'max_words': ...})."""
+def _load_config(path: str) -> tuple[TrainConfig, dict, int, dict, str]:
+    """Return (cfg, label_aliases, chunk_stride, {'max_words': ...}, threshold_objective)."""
     data = yaml.safe_load(Path(path).read_text())
     gliner = data.pop("gliner", {}) or {}
     cfg = TrainConfig(**data)
@@ -80,7 +84,8 @@ def _load_config(path: str) -> tuple[TrainConfig, dict, int, dict]:
         "stride": int(chunk_cfg.get("stride", 64)),
         "max_words": chunk_cfg.get("max_words"),
     }
-    return cfg, gliner.get("label_aliases", {}) or {}, chunk["stride"], chunk
+    objective = str(gliner.get("threshold_objective", "f1"))
+    return cfg, gliner.get("label_aliases", {}) or {}, chunk["stride"], chunk, objective
 
 
 def _resolve_device(name: str | None):
@@ -143,9 +148,10 @@ def main() -> None:
     import torch
 
     args = parse_args()
-    cfg, label_aliases, chunk_stride, chunk = _load_config(args.config)
+    cfg, label_aliases, chunk_stride, chunk, cfg_objective = _load_config(args.config)
     if args.no_chunking:
         chunk_stride = -1
+    objective = args.threshold_objective or cfg_objective
 
     model_name = args.model or cfg.model_name
     finetuned_dir = Path(args.finetuned_dir) if args.finetuned_dir else Path(cfg.output_dir) / "final"
@@ -186,9 +192,13 @@ def main() -> None:
                 model, val_native, labels=train_types,
                 label_aliases=label_aliases,
                 batch_size=cfg.per_device_eval_batch_size,
+                objective=objective,
                 progress=True,
             )
-            print(f"      tuned baseline threshold = {threshold} (val f1={best_m['f1']:.4f})")
+            print(
+                f"      tuned baseline threshold = {threshold} (objective={objective}; "
+                f"val f1={best_m['f1']:.4f} f2={best_m['f2']:.4f})"
+            )
         elif threshold is None:
             threshold = 0.5
             print("      no validation split — using threshold 0.5")
@@ -219,6 +229,7 @@ def main() -> None:
     baseline = {
         "baseline_model": model_name,
         "threshold": threshold,
+        "threshold_objective": objective,
         "chunking": {"stride": chunk_stride if chunk_stride >= 0 else None,
                      "max_words": native_max_words},
         "closed": closed,

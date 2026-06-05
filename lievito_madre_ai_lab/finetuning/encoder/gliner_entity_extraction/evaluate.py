@@ -35,6 +35,15 @@ def _batch_starts(n: int, batch_size: int, progress: bool, desc: str):
         return rng
 
 
+def _fbeta(precision: float, recall: float, beta: float = 1.0) -> float:
+    """F-beta. beta>1 weights recall over precision (beta=2 → recall 2× as
+    important), which is the right objective for PII/redaction where a missed
+    entity is worse than a false flag."""
+    b2 = beta * beta
+    denom = b2 * precision + recall
+    return (1 + b2) * precision * recall / denom if denom > 0 else 0.0
+
+
 def _prf(tp: int, fp: int, fn: int) -> tuple[float, float, float]:
     precision = tp / (tp + fp) if (tp + fp) else 0.0
     recall = tp / (tp + fn) if (tp + fn) else 0.0
@@ -200,21 +209,27 @@ def tune_threshold(
     batch_size: int = 16,
     label_aliases: dict[str, str] | None = None,
     min_threshold: float = 0.05,
+    objective: str = "f1",
     progress: bool = False,
 ) -> tuple[float, dict[str, float], list[dict[str, float]]]:
-    """Sweep decision thresholds on *dataset* and return the micro-F1 optimum.
+    """Sweep decision thresholds on *dataset* and return the optimum.
 
-    GLiNER's default 0.5 cutoff is rarely F1-optimal — PII especially is
+    GLiNER's default 0.5 cutoff is rarely optimal — PII especially is
     recall-sensitive, so the best operating point usually sits lower. We run
     inference once at ``min_threshold`` (capturing low-score spans) and then
     re-threshold the cached scored spans for each candidate, so the whole
     sweep costs a single inference pass.
 
+    ``objective`` picks what to maximise: ``"f1"`` (balanced) or ``"f2"``
+    (recall-weighted — the right choice for PII/redaction, where a missed
+    entity is worse than a false flag; this lands on a lower threshold).
+
     Returns ``(best_threshold, best_metrics, curve)`` where ``curve`` is a list
-    of ``{"threshold", "precision", "recall", "f1"}`` dicts (handy for logging
-    a PR trade-off table). Ties on F1 resolve to the *higher* threshold, which
-    favours precision at equal F1.
+    of ``{"threshold", "precision", "recall", "f1", "f2"}`` dicts. Ties resolve
+    to the *higher* threshold.
     """
+    if objective not in {"f1", "f2"}:
+        raise ValueError(f"objective must be 'f1' or 'f2'; got {objective!r}")
     if thresholds is None:
         thresholds = [round(0.05 * i, 2) for i in range(1, 19)]  # 0.05 .. 0.90
     thresholds = sorted(t for t in thresholds if t >= min_threshold) or [min_threshold]
@@ -232,11 +247,12 @@ def tune_threshold(
         m = score_predictions(filtered, gold)
         row = {
             "threshold": t,
-            "precision": m["precision"], "recall": m["recall"], "f1": m["f1"],
+            "precision": m["precision"], "recall": m["recall"],
+            "f1": m["f1"], "f2": _fbeta(m["precision"], m["recall"], 2.0),
         }
         curve.append(row)
-        # >= so that, on an F1 tie, the higher (later) threshold wins.
-        if best is None or row["f1"] >= best["f1"]:
+        # >= so that, on a tie, the higher (later) threshold wins.
+        if best is None or row[objective] >= best[objective]:
             best = row
     assert best is not None  # thresholds is non-empty after filtering
     return best["threshold"], best, curve

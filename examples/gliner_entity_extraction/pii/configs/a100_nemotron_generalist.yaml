@@ -90,6 +90,12 @@ gliner:
   # (else this silently falls back to closed-set-only with a warning).
   monitor_zeroshot: true
 
+  # Tune the persisted decision threshold for F2 (recall-weighted), not F1.
+  # PII is recall-sensitive — a missed entity is worse than a false flag — and
+  # F1-tuning lands on a threshold too high for general/OOD use (e.g. 0.6 here
+  # strangled recall; F2 lands ~0.3-0.4). This sets serve.py's default cutoff.
+  threshold_objective: f2
+
   loss:
     funcs: ["focal"]
     focal_alpha: 0.75

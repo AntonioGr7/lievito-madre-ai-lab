@@ -96,6 +96,10 @@ gliner:
 
   head_lr_multiplier: 5.0            # head LR = learning_rate × this
 
+  # PII is recall-sensitive — tune the persisted threshold for F2, not F1
+  # (F1 lands too high, e.g. ~0.6, and strangles recall on general/OOD text).
+  threshold_objective: f2
+
   peft:
     enabled: false                   # full fine-tuning
 
