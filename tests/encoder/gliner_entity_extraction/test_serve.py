@@ -26,7 +26,7 @@ def patch_gliner(monkeypatch):
                 base_model_name_or_path=name,
             )
             m.model = MagicMock()
-            m.batch_predict_entities = MagicMock(
+            m.inference = MagicMock(
                 return_value=[[{"label": "PERSON", "text": "Eve",
                                 "start": 0, "end": 3, "score": 0.9}]]
             )
@@ -70,14 +70,14 @@ def test_predictor_loads_lora_save(patch_gliner, tmp_path, monkeypatch):
     assert pred._model.model is sentinel_merged
 
 
-def test_predict_uses_batch_predict_entities(patch_gliner, tmp_path):
-    """The new _forward path calls batch_predict_entities, not the per-text loop."""
+def test_predict_uses_inference(patch_gliner, tmp_path):
+    """The _forward path calls the (non-deprecated) inference API, batched."""
     from lievito_madre_ai_lab.finetuning.encoder.gliner_entity_extraction.serve import GLiNERPredictor
 
     pred = GLiNERPredictor(tmp_path, use_compile=False, warmup_steps=0)
     # Mock returns one empty span-list per input text (so the result-zipping below
     # doesn't IndexError). The test asserts batching behavior, not span content.
-    pred._model.batch_predict_entities = MagicMock(side_effect=lambda texts, *a, **kw: [[] for _ in texts])
+    pred._model.inference = MagicMock(side_effect=lambda texts, *a, **kw: [[] for _ in texts])
     pred.predict(["a", "b", "c"])
     # Single call covers all three texts (batched).
-    assert pred._model.batch_predict_entities.call_count == 1
+    assert pred._model.inference.call_count == 1

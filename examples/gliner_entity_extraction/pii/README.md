@@ -39,7 +39,9 @@ Five recipes live in [configs/](configs/), all consuming the same char-offset da
 | `t4_small.yaml`     | T4-class GPU (16 GB) — DeBERTa-v3-small, fp16. |
 | `a10_medium.yaml`   | A10-class (24 GB) — DeBERTa-v3-base, bf16, full FT. |
 | `pii_gliner.yaml`   | Default reference recipe (DeBERTa-v3 multitask, LoRA). |
-| `a100_nemotron.yaml`| **A100 (40 GB) full fine-tuning on Nemotron-PII** — frontier-SOTA `modern-gliner-bi-large-v1.0` (ModernBERT bi-encoder, 8192 ctx, chunking off). |
+| `a100_nemotron.yaml`| **A100 (40 GB) full fine-tuning on Nemotron-PII** — frontier-SOTA `modern-gliner-bi-large-v1.0` (ModernBERT bi-encoder, full FT). Chunking off: rows >2048 word-tokens truncate. |
+| `a100_nemotron_longdoc.yaml`| Same as above but **sliding-window chunking ON** — use when many rows exceed the 2048-token `max_len` (long docs are split into overlapping windows instead of truncated). |
+| `a100_nemotron_generalist.yaml`| **Recommended default.** Keeps **zero-shot generalization** (frozen label encoder + zero-shot-aware selection) **and** handles long docs (chunking on). See below. |
 
 Swap configs by changing the `--config` flag — the dataset contract is the same across all of them. Note `a100_nemotron.yaml` expects the **Nemotron** dataset, so prep with `prepare_nemotron.py` (the others default to OpenPII).
 
@@ -103,6 +105,29 @@ gliner:
     GIVENNAME: "given name"
     PASSPORTNUM: "passport number"
 ```
+
+## Keeping zero-shot generalization (the generalist recipe)
+
+A GLiNER fine-tune is only worth more than a plain token-classifier if it **keeps its zero-shot ability** — extracting label types it never trained on. Naive full fine-tuning destroys that: it overfits the prompt space to your trained labels, and zero-shot F1 on held-out labels collapses. [`a100_nemotron_generalist.yaml`](configs/a100_nemotron_generalist.yaml) is built to retain it:
+
+1. **`freeze_labels_encoder: true`** — the dominant lever. The bi-encoder's label encoder maps a label prompt → embedding; full-FT'ing it is what corrupts the prompt space. Frozen, the prompt space stays exactly as the base model's, so unseen labels still embed sensibly — while the text encoder + span head still fully fine-tune.
+2. **`monitor_zeroshot: true`** — measures held-out-label F1 every eval and selects the checkpoint with the best **combined** score, `eval_generalist_f1` (harmonic mean of closed-set and zero-shot F1). The harmonic mean means a model can't win by acing closed-set while collapsing zero-shot.
+3. **Conservative training + label dropout** so the text encoder drifts less.
+
+It also keeps **sliding-window chunking on** so the standard trainer never silently truncates long documents (the [longdoc](#config-variants) behavior is folded in). Net: a default that neither overfits labels nor drops long-doc entities.
+
+LoRA is **not** required — with the label encoder frozen, full FT keeps the best closed-set quality, and the monitor tells you if the text encoder is still drifting. Only then turn on the optional `peft` block as an extra clamp.
+
+This needs validation to carry held-out-label gold, so prep with `--val-all-labels` into a dedicated dir:
+
+```bash
+python examples/gliner_entity_extraction/pii/dataset/prepare_nemotron.py \
+    --out-dir data/processed/nemotron-gliner-genz --val-all-labels
+python scripts/gliner_entity_extraction/train_gliner.py \
+    --config examples/gliner_entity_extraction/pii/configs/a100_nemotron_generalist.yaml
+```
+
+Watch `eval_f1`, `eval_zeroshot_f1`, and `eval_generalist_f1` in the logs — the gap between the first two is exactly the generalization you're spending. (Without `--val-all-labels`, monitoring auto-disables with a warning and selection falls back to closed-set F1.)
 
 ## Zero-shot baseline (did fine-tuning earn its keep?)
 

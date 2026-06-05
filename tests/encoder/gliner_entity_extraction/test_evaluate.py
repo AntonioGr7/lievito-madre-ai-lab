@@ -8,6 +8,8 @@ for mod in ("gliner",):
 
 from lievito_madre_ai_lab.finetuning.encoder.gliner_entity_extraction.evaluate import (  # noqa: E402
     score_predictions,
+    _harmonic_mean,
+    _has_label_gold,
 )
 
 
@@ -57,3 +59,24 @@ def test_empty_pred_and_gold():
     assert m["tp"] == 0
     assert m["fp"] == 0
     assert m["fn"] == 0
+
+
+# --- generalist (zero-shot-aware) monitoring helpers ----------------------
+
+def test_harmonic_mean_penalises_lopsided():
+    # A model that aces closed-set but collapses zero-shot must NOT win the
+    # combined metric — harmonic mean drags it far below the arithmetic mean.
+    assert _harmonic_mean(0.9, 0.9) == 0.9
+    assert _harmonic_mean(0.95, 0.0) == 0.0
+    assert _harmonic_mean(0.95, 0.10) < 0.20   # arithmetic mean would be 0.525
+
+
+def test_has_label_gold():
+    ds = [
+        {"spans": [{"start": 0, "end": 3, "label": "first_name"},
+                   {"start": 4, "end": 6, "label": "age"}]},
+        {"spans": [{"start": 0, "end": 5, "label": "email"}]},
+    ]
+    assert _has_label_gold(ds, ["age"]) is True
+    assert _has_label_gold(ds, ["swift_bic"]) is False
+    assert _has_label_gold(ds, []) is False

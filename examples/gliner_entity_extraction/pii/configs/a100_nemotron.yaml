@@ -5,8 +5,10 @@
 #     Nemotron-PII's ~55 entity types (the architecture the "million-label
 #     NER" work is built on), and ModernBERT gives a native 8192-token context
 #     + 3-4x throughput over DeBERTa-v3.
-#   - Because the context is long, sliding-window chunking is turned OFF below
-#     (stride: -1): most Nemotron rows fit in a single window.
+#   - Sliding-window chunking is turned OFF below (stride: -1) since most
+#     Nemotron rows are short. NOTE: GLiNER still caps inputs at
+#     model.config.max_len (2048 for this checkpoint), so longer rows truncate
+#     — see the `chunking` block to turn it on for long-document corpora.
 #
 # Prep the dataset first (carves a 10% validation split off train):
 #   python examples/gliner_entity_extraction/pii/dataset/prepare_nemotron.py \
@@ -98,9 +100,14 @@ gliner:
     enabled: false                   # full fine-tuning
 
   chunking:
-    stride: -1                       # OFF — ModernBERT's 8192 ctx covers Nemotron rows.
-    # If your corpus has rows longer than model.config.max_len (GLiNER may still
-    # cap internally), re-enable with e.g. stride: 96 and max_words: <= max_len.
+    stride: -1                       # OFF by default — most Nemotron rows are short.
+    # IMPORTANT: GLiNER caps inputs at model.config.max_len = 2048 for this
+    # checkpoint (NOT ModernBERT's 8192 positional limit). With chunking off,
+    # any row longer than ~2048 word-tokens is silently truncated and entities
+    # past the cap are lost (you'll see "Sentence ... truncated to 2048"
+    # warnings). If your corpus has many long rows, turn chunking ON so they're
+    # split into overlapping windows — e.g. stride: 128 (max_words then defaults
+    # to model.config.max_len). Changing this requires retraining to benefit.
 
   # Nemotron labels are snake_case (first_name, medical_record_number, ...).
   # They are auto-humanized to natural-language prompts ("first name",

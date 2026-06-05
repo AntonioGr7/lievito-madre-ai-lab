@@ -18,6 +18,23 @@ from lievito_madre_ai_lab.finetuning.encoder.gliner_entity_extraction.dataset im
 )
 
 
+def _batch_starts(n: int, batch_size: int, progress: bool, desc: str):
+    """Yield batch start indices, wrapped in a tqdm bar when *progress* is set.
+
+    Long evals (a full test split = thousands of forward passes) otherwise emit
+    no output for many minutes and look hung. Defaults off so the per-epoch
+    training callback stays quiet.
+    """
+    rng = range(0, n, batch_size)
+    if not progress:
+        return rng
+    try:
+        from tqdm.auto import tqdm
+        return tqdm(rng, desc=desc, unit="batch")
+    except Exception:
+        return rng
+
+
 def _prf(tp: int, fp: int, fn: int) -> tuple[float, float, float]:
     precision = tp / (tp + fp) if (tp + fp) else 0.0
     recall = tp / (tp + fn) if (tp + fn) else 0.0
@@ -85,6 +102,7 @@ def evaluate_split(
     threshold: float = 0.5,
     batch_size: int = 16,
     label_aliases: dict[str, str] | None = None,
+    progress: bool = False,
 ) -> dict[str, float]:
     """Run GLiNER inference over *dataset* and score char-offset entity sets.
 
@@ -111,7 +129,7 @@ def evaluate_split(
     ]
 
     pred_per_text: list[list[dict]] = []
-    for start in range(0, len(texts), batch_size):
+    for start in _batch_starts(len(texts), batch_size, progress, "eval"):
         chunk = texts[start : start + batch_size]
         batch = model.inference(chunk, prompt_labels, threshold=threshold)
         for spans in batch:
@@ -136,6 +154,7 @@ def _scored_predictions(
     min_threshold: float,
     batch_size: int,
     label_aliases: dict[str, str] | None,
+    progress: bool = False,
 ) -> tuple[list[list[dict]], list[list[dict]]]:
     """Run inference once at *min_threshold* and return (preds_with_scores, gold).
 
@@ -156,7 +175,7 @@ def _scored_predictions(
     ]
 
     pred_per_text: list[list[dict]] = []
-    for start in range(0, len(texts), batch_size):
+    for start in _batch_starts(len(texts), batch_size, progress, "threshold-sweep"):
         chunk = texts[start : start + batch_size]
         batch = model.inference(chunk, prompt_labels, threshold=min_threshold)
         for spans in batch:
@@ -181,6 +200,7 @@ def tune_threshold(
     batch_size: int = 16,
     label_aliases: dict[str, str] | None = None,
     min_threshold: float = 0.05,
+    progress: bool = False,
 ) -> tuple[float, dict[str, float], list[dict[str, float]]]:
     """Sweep decision thresholds on *dataset* and return the micro-F1 optimum.
 
@@ -202,6 +222,7 @@ def tune_threshold(
     preds, gold = _scored_predictions(
         model, dataset, labels,
         min_threshold=min_threshold, batch_size=batch_size, label_aliases=label_aliases,
+        progress=progress,
     )
 
     curve: list[dict[str, float]] = []
@@ -221,6 +242,21 @@ def tune_threshold(
     return best["threshold"], best, curve
 
 
+def _harmonic_mean(a: float, b: float) -> float:
+    """Harmonic mean — penalises lopsided pairs, so a model can't win the
+    combined metric by acing closed-set while collapsing on zero-shot."""
+    return (2 * a * b / (a + b)) if (a + b) > 0 else 0.0
+
+
+def _has_label_gold(dataset, labels: list[str]) -> bool:
+    """True if any row in *dataset* has a gold span with a label in *labels*."""
+    label_set = set(labels)
+    for row in dataset:
+        if any(s.get("label") in label_set for s in row["spans"]):
+            return True
+    return False
+
+
 def build_eval_callback(
     eval_dataset,
     train_types: list[str],
@@ -228,9 +264,33 @@ def build_eval_callback(
     prefix: str = "eval",
     threshold: float = 0.5,
     batch_size: int = 16,
+    holdout_types: list[str] | None = None,
+    monitor_zeroshot: bool = False,
 ):
-    """Build a TrainerCallback that populates `metrics[<prefix>_*]` from evaluate_split."""
+    """TrainerCallback that populates `metrics[<prefix>_*]` from evaluate_split.
+
+    With ``monitor_zeroshot=True`` and a ``holdout_types`` set that actually has
+    gold in *eval_dataset*, it ALSO runs a zero-shot pass over the held-out
+    labels each eval and publishes ``<prefix>_zeroshot_f1`` plus a combined
+    ``<prefix>_generalist_f1`` (harmonic mean of closed-set and zero-shot F1).
+    Point ``metric_for_best_model`` at the latter to select the checkpoint that
+    stays most general — not the one that overfits the trained labels.
+
+    Zero-shot monitoring needs validation to contain held-out-label gold (prep
+    with ``--val-all-labels``); if it doesn't, monitoring is disabled with a
+    warning and only the closed-set metrics are reported.
+    """
     from transformers import TrainerCallback
+
+    holdout_types = list(holdout_types or [])
+    do_zeroshot = monitor_zeroshot and bool(holdout_types)
+    if do_zeroshot and not _has_label_gold(eval_dataset, holdout_types):
+        print(
+            "[eval] monitor_zeroshot=True but the eval split has no held-out-label "
+            "gold — zero-shot monitoring disabled. Re-prep validation with "
+            "--val-all-labels to enable the generalist metric."
+        )
+        do_zeroshot = False
 
     class _EvalCallback(TrainerCallback):
         def on_evaluate(self, args, state, control, model=None, metrics=None, **_):
@@ -241,14 +301,19 @@ def build_eval_callback(
             with torch.inference_mode():
                 aliases = getattr(model.config, "label_aliases", {}) or {}
                 results = evaluate_split(
-                    model,
-                    eval_dataset,
-                    labels=train_types,
-                    threshold=threshold,
-                    batch_size=batch_size,
-                    label_aliases=aliases,
+                    model, eval_dataset, labels=train_types,
+                    threshold=threshold, batch_size=batch_size, label_aliases=aliases,
                 )
-            prefixed = {f"{prefix}_{k}": v for k, v in results.items()}
+                prefixed = {f"{prefix}_{k}": v for k, v in results.items()}
+                if do_zeroshot:
+                    zs = evaluate_split(
+                        model, eval_dataset, labels=holdout_types,
+                        threshold=threshold, batch_size=batch_size, label_aliases=aliases,
+                    )
+                    prefixed.update({f"{prefix}_zeroshot_{k}": v for k, v in zs.items()})
+                    prefixed[f"{prefix}_generalist_f1"] = _harmonic_mean(
+                        results.get("f1", 0.0), zs.get("f1", 0.0)
+                    )
             metrics.update(prefixed)
 
             # HF Trainer logs `metrics` to stdout/W&B *before* this callback
@@ -264,7 +329,10 @@ def build_eval_callback(
                     wandb.log(scalar_extras, step=state.global_step)
             except ImportError:
                 pass
-            headline = {k: scalar_extras[k] for k in (f"{prefix}_precision", f"{prefix}_recall", f"{prefix}_f1") if k in scalar_extras}
+            headline_keys = [f"{prefix}_precision", f"{prefix}_recall", f"{prefix}_f1"]
+            if do_zeroshot:
+                headline_keys += [f"{prefix}_zeroshot_f1", f"{prefix}_generalist_f1"]
+            headline = {k: scalar_extras[k] for k in headline_keys if k in scalar_extras}
             if headline:
                 print(f"[eval @ step {state.global_step}] " + " ".join(f"{k}={v:.4f}" for k, v in headline.items()))
 

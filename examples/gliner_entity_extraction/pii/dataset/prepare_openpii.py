@@ -72,6 +72,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--languages", default="en")
     p.add_argument("--limit", type=int, default=None)
     p.add_argument("--holdout-types", nargs="*", default=DEFAULT_HOLDOUT)
+    p.add_argument("--val-all-labels", action="store_true",
+                   help="Convert validation with the FULL label set (incl. holdout) so "
+                        "training can monitor zero-shot F1 on held-out labels. Without it, "
+                        "validation carries only trained labels (closed-set monitoring only).")
     p.add_argument("--text-col", default="source_text")
     p.add_argument("--mask-col", default="privacy_mask")
     return p.parse_args()
@@ -137,13 +141,19 @@ def main() -> None:
     for split_name in ("train", "validation"):
         if split_name not in raw:
             continue
+        # Train always uses train_set. Validation can optionally keep the full
+        # vocabulary (--val-all-labels) so the trainer can monitor zero-shot F1.
+        allowed = (
+            full_set if (split_name == "validation" and args.val_all_labels) else train_set
+        )
         processed[split_name] = raw[split_name].map(
-            lambda row: _convert_to_char_offset(
-                row, allowed_labels=train_set,
+            lambda row, allowed=allowed: _convert_to_char_offset(
+                row, allowed_labels=allowed,
                 text_col=args.text_col, mask_col=args.mask_col,
             ),
             remove_columns=raw[split_name].column_names,
-            desc=f"Converting {split_name} -> char-offset",
+            desc=f"Converting {split_name} -> char-offset"
+                 + (" (all labels)" if allowed is full_set else ""),
         )
 
     if "test" in raw:

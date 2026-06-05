@@ -1,0 +1,127 @@
+# A100 (40 GB) — GENERALIST recipe on Nemotron-PII (the recommended default).
+#
+# A GLiNER fine-tune is only worth more than a plain token-classifier if it
+# KEEPS its zero-shot ability — extracting label types it never trained on.
+# Naive full fine-tuning destroys that. This recipe retains it with three levers,
+# in order of impact:
+#
+#   1. freeze_labels_encoder: true  -> THE big one. The bi-encoder's label encoder
+#      maps a label prompt -> embedding; full-FT'ing it is what corrupts the
+#      prompt space so unseen labels stop embedding sensibly. Frozen, the prompt
+#      space stays EXACTLY as the base model's, so zero-shot survives — while the
+#      text encoder + span head still fully fine-tune against those stable
+#      embeddings (so closed-set quality stays high).
+#   2. monitor_zeroshot: true       -> measures held-out-label F1 every eval and
+#      selects the checkpoint with the best *combined* (closed + zero-shot) score,
+#      so you never ship a checkpoint that overfit the closed set.
+#   3. label dropout + conservative LR -> less text-encoder drift from the base.
+#
+# It also handles long documents (sliding-window chunking ON, below), so the
+# standard trainer never truncates. Net: doesn't overfit labels, doesn't drop
+# long-doc entities — the safe default for any GLiNER fine-tune.
+#
+# Note on LoRA: NOT used here. With the label encoder frozen, full FT of the rest
+# keeps the best closed-set F1, and the zero-shot monitor tells you if the text
+# encoder is still drifting. Only if it is (zero-shot F1 sliding across epochs)
+# turn on the optional `peft` block at the bottom as an extra clamp.
+#
+# REQUIRES validation to contain held-out-label gold, so prep with --val-all-labels
+# into a dedicated dir:
+#   python examples/gliner_entity_extraction/pii/dataset/prepare_nemotron.py \
+#       --out-dir data/processed/nemotron-gliner-genz --val-all-labels
+#   python scripts/gliner_entity_extraction/train_gliner.py \
+#       --config examples/gliner_entity_extraction/pii/configs/a100_nemotron_generalist.yaml
+
+processed_dir: data/processed/nemotron-gliner-genz
+model_name: knowledgator/modern-gliner-bi-large-v1.0
+output_dir: outputs/a100_nemotron_generalist
+experiment_id: a100_nemotron_generalist_01
+
+# --- core training -----------------------------------------------------
+num_train_epochs: 3
+max_steps: -1
+per_device_train_batch_size: 8
+per_device_eval_batch_size: 16
+gradient_accumulation_steps: 4       # effective batch = 32
+learning_rate: 7e-6                  # full-FT encoder LR; head = lr × head_lr_multiplier
+weight_decay: 0.01
+warmup_ratio: 0.1
+max_grad_norm: 1.0
+lr_scheduler_type: cosine
+optim: adamw_torch_fused
+seed: 42
+
+# --- eval & checkpointing ---------------------------------------------
+eval_strategy: epoch
+save_strategy: epoch
+eval_steps: null
+save_steps: null
+load_best_model_at_end: true
+metric_for_best_model: eval_generalist_f1   # combined closed + zero-shot (see monitor_zeroshot)
+greater_is_better: true
+save_total_limit: 2
+early_stopping_patience: 2
+eval_accumulation_steps: null
+
+# --- compute / throughput ---------------------------------------------
+precision: bf16
+gradient_checkpointing: true
+torch_compile: false
+train_sampling_strategy: random
+dataloader_num_workers: 8
+pad_to_multiple_of: 8
+
+logging_steps: 50
+report_to: wandb
+
+wandb_project: lievito-madre-ai-lab
+wandb_run_name: "a100-nemotron-generalist-001"
+wandb_tags: ["a100", "full-ft", "generalist", "frozen-label-encoder", "nemotron-pii"]
+wandb_notes: "Generalist recipe: frozen label encoder + zero-shot-aware selection (full FT)."
+
+# --- GLiNER-specific knobs --------------------------------------------
+gliner:
+  # Preserve the base model's prompt space — the single biggest lever for
+  # keeping zero-shot ability through fine-tuning.
+  freeze_labels_encoder: true
+
+  # Monitor held-out-label F1 during training and select the best checkpoint on
+  # the combined closed+zero-shot metric. Needs --val-all-labels at prep time
+  # (else this silently falls back to closed-set-only with a warning).
+  monitor_zeroshot: true
+
+  loss:
+    funcs: ["focal"]
+    focal_alpha: 0.75
+    focal_gamma: 2.0
+    reduction: sum
+
+  sampling:
+    max_types: 40
+    max_neg_type_ratio: 1.5          # a bit lower than the specialist recipe — don't over-train rejection
+    random_drop: 0.2                 # label dropout: more prompt variety → better generalization
+
+  head_lr_multiplier: 5.0
+
+  # Full FT by default (label encoder frozen above). Turn this on ONLY if the
+  # zero-shot monitor shows the text encoder still drifting — it clamps drift
+  # further at some cost to closed-set F1:
+  # peft:
+  #   enabled: true
+  #   r: 16
+  #   alpha: 32
+  #   dropout: 0.1
+  #   target_modules: auto           # resolves to ModernBERT's Wqkv/Wi/Wo
+  peft:
+    enabled: false
+
+  chunking:
+    # ON — the standard trainer must never silently truncate. GLiNER caps
+    # inputs at model.config.max_len (2048 here); with chunking on, longer rows
+    # are split into overlapping windows (max_words defaults to max_len) instead
+    # of truncated, and GLiNERPredictor stitches them back at inference. Peak
+    # memory is unchanged (max sequence is still 2048); long docs just yield
+    # more chunks. Set stride: -1 only if you're certain every row fits 2048.
+    stride: 128
+
+  label_aliases: {}                  # snake_case auto-humanized at train/eval/serve

@@ -170,6 +170,7 @@ def main() -> None:
         sampling_cfg=sampling_cfg,
         label_aliases=label_aliases,
         peft_cfg=peft_cfg,
+        freeze_labels_encoder=bool(gliner_raw.get("freeze_labels_encoder", False)),
     )
 
     print("[3/5] Building trainer …")
@@ -182,6 +183,7 @@ def main() -> None:
         gliner_cfg=train_cfg,
         train_types=train_types,
         early_stopping_patience=cfg.early_stopping_patience,
+        monitor_zeroshot=bool(gliner_raw.get("monitor_zeroshot", False)),
     )
 
     print("[4/5] Training …")
@@ -224,6 +226,7 @@ def main() -> None:
             model, val_for_tuning, labels=train_types,
             label_aliases=label_aliases,
             batch_size=cfg.per_device_eval_batch_size,
+            progress=True,
         )
         f1_at_half = next(
             (r["f1"] for r in threshold_curve if r["threshold"] == 0.5), None
@@ -278,6 +281,7 @@ def main() -> None:
             label_aliases=label_aliases,
             threshold=eval_threshold,
             batch_size=cfg.per_device_eval_batch_size,
+            progress=True,
         )
         for k, v in closed.items():
             metrics[f"test_closed_{k}"] = v
@@ -292,6 +296,7 @@ def main() -> None:
                 label_aliases=label_aliases,
                 threshold=eval_threshold,
                 batch_size=cfg.per_device_eval_batch_size,
+                progress=True,
             )
             for k, v in zero.items():
                 metrics[f"test_zeroshot_{k}"] = v

@@ -109,3 +109,30 @@ def test_load_gliner_lora_wraps_encoder(fake_gliner, monkeypatch):
     assert model.model is sentinel
     assert model.config.peft_enabled is True
     assert model.config.peft_target_modules == ["query_proj", "key_proj", "value_proj", "dense"]
+
+
+def test_freeze_labels_encoder_freezes_only_label_params():
+    """_freeze_labels_encoder freezes the label encoder, leaves the text encoder trainable."""
+    from lievito_madre_ai_lab.finetuning.encoder.gliner_entity_extraction.model import (
+        _freeze_labels_encoder,
+    )
+
+    class _P:
+        def __init__(self): self.requires_grad = True
+        def requires_grad_(self, v): self.requires_grad = v
+        def numel(self): return 100
+
+    label_p = _P()
+    text_p = _P()
+
+    class _M:
+        def named_parameters(self):
+            return [
+                ("model.token_rep_layer.labels_encoder.0.Wqkv", label_p),
+                ("model.token_rep_layer.bert_layer.model.0.Wqkv", text_p),
+            ]
+
+    tensors, params = _freeze_labels_encoder(_M())
+    assert tensors == 1 and params == 100
+    assert label_p.requires_grad is False   # label encoder frozen
+    assert text_p.requires_grad is True     # text encoder still trains

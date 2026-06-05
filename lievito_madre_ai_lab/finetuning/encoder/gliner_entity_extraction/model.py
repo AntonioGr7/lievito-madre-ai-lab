@@ -175,6 +175,30 @@ def _attach_gradient_checkpointing(model) -> None:
     model.gradient_checkpointing_disable = types.MethodType(_disable, model)
 
 
+def _freeze_labels_encoder(model) -> tuple[int, int]:
+    """Freeze the bi-encoder's label encoder to preserve zero-shot generality.
+
+    In a bi-encoder GLiNER the *label* encoder (e.g. BGE) maps an entity-type
+    prompt → embedding; the span head scores spans against those embeddings.
+    Fine-tuning that encoder is what erodes the model's ability to handle
+    label types it never saw in training (it overfits the prompt geometry to
+    the trained vocabulary). Freezing it keeps the prompt space exactly as the
+    base model's, so unseen labels still embed sensibly — the single biggest
+    lever for retaining zero-shot performance through fine-tuning.
+
+    Matches by parameter-name substring so it works whether the model is
+    full-FT or PEFT-wrapped (it also freezes any LoRA adapters peft attached to
+    the label encoder). Returns ``(num_tensors, num_params)`` frozen.
+    """
+    tensors = params = 0
+    for name, p in model.named_parameters():
+        if ("labels_encoder" in name or "label_encoder" in name) and p.requires_grad:
+            p.requires_grad_(False)
+            tensors += 1
+            params += p.numel()
+    return tensors, params
+
+
 def _resolve_lora_targets(model, requested) -> list[str]:
     """Resolve `peft.target_modules`: 'auto' → backbone-appropriate list."""
     if requested != "auto":
@@ -218,6 +242,7 @@ def load_gliner(
     sampling_cfg: dict | None = None,
     label_aliases: dict[str, str] | None = None,
     peft_cfg: PeftConfig | None = None,
+    freeze_labels_encoder: bool = False,
 ):
     """Load a GLiNER model and configure it for fine-tuning.
 
@@ -273,6 +298,21 @@ def load_gliner(
         model.model = get_peft_model(model.model, lora)
         model.config.peft_enabled = True
         model.config.peft_target_modules = targets
+
+    # Freeze the label encoder LAST so it catches base + any PEFT adapter params.
+    if freeze_labels_encoder:
+        tensors, params = _freeze_labels_encoder(model)
+        model.config.labels_encoder_frozen = bool(tensors)
+        if tensors:
+            print(
+                f"      [load_gliner] froze label encoder "
+                f"({tensors} tensors, {params:,} params) to preserve zero-shot prompt space"
+            )
+        else:
+            print(
+                "      [load_gliner] freeze_labels_encoder=True but no label-encoder "
+                "params found (uni-encoder model?); nothing frozen"
+            )
 
     _attach_gradient_checkpointing(model)
     return model

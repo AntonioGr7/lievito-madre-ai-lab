@@ -38,7 +38,7 @@ class GLiNERPredictor:
         *,
         device: str | None = None,
         batch_size: int = 16,
-        use_compile: bool = True,
+        use_compile: bool = False,
         compile_mode: str = "default",
         amp_dtype: torch.dtype | None = None,
         quantize_cpu: bool = False,
@@ -119,10 +119,21 @@ class GLiNERPredictor:
             if ffn_qconfig:
                 model.model = quantize_dynamic(model.model, ffn_qconfig, dtype=torch.qint8)
 
+        # Let A100/Ampere use TF32 matmuls for the fp32 ops that stay outside
+        # the bf16 autocast region (silences the inductor TF32 hint too).
+        if self.device.type == "cuda":
+            torch.set_float32_matmul_precision("high")
+
         compiled = False
         if use_compile and _HAS_COMPILE and self.device.type in ("cuda", "mps"):
             if hasattr(model, "model"):
-                model.model = torch.compile(model.model, mode=compile_mode, fullgraph=False)
+                # dynamic=True so variable input lengths don't trigger a fresh
+                # recompile per shape — without it, compile is a net loss for
+                # anything but fixed-shape, high-throughput batched serving (and
+                # on bi-encoders the recompiles can look like a hang).
+                model.model = torch.compile(
+                    model.model, mode=compile_mode, fullgraph=False, dynamic=True
+                )
                 compiled = True
 
         self._model = model
@@ -236,7 +247,9 @@ class GLiNERPredictor:
             chunk_meta = [(i, 0) for i in range(len(texts))]
 
         with self._amp_ctx:
-            raw_batches = self._model.batch_predict_entities(
+            # `inference` is gliner's current batched API (batch_predict_entities
+            # is deprecated); same return shape — list-per-text of span dicts.
+            raw_batches = self._model.inference(
                 forward_texts, labels, threshold=threshold,
             )
 
@@ -247,11 +260,15 @@ class GLiNERPredictor:
         per_text: list[list[dict]] = [[] for _ in texts]
         for raw, (src_idx, shift) in zip(raw_batches, chunk_meta):
             for r in raw:
+                start = int(r["start"]) + shift
+                end = int(r["end"]) + shift
                 per_text[src_idx].append({
                     "label": reverse.get(r["label"], r["label"]),
-                    "text":  r["text"],
-                    "start": int(r["start"]) + shift,
-                    "end":   int(r["end"]) + shift,
+                    # Slice from the source text rather than trusting the
+                    # model's echoed substring — always correct after the shift.
+                    "text":  texts[src_idx][start:end],
+                    "start": start,
+                    "end":   end,
                     "score": float(r["score"]),
                 })
 
@@ -332,7 +349,14 @@ if __name__ == "__main__":
         ),
     )
     parser.add_argument("--labels", nargs="*", default=None)
-    parser.add_argument("--no-compile", action="store_true")
+    parser.add_argument(
+        "--compile", action="store_true",
+        help=(
+            "Opt into torch.compile. Off by default: for one-shot or "
+            "variable-length inference the (re)compile cost dwarfs the forward "
+            "pass. Only worth it for sustained, fixed-shape batched serving."
+        ),
+    )
     parser.add_argument("--no-merge-lora", action="store_true")
     parser.add_argument("--quantize", action="store_true")
     parser.add_argument(
@@ -367,7 +391,7 @@ if __name__ == "__main__":
         args.model_dir,
         device=args.device,
         batch_size=args.batch_size,
-        use_compile=not args.no_compile,
+        use_compile=args.compile,
         quantize_cpu=args.quantize,
         merge_lora_on_load=not args.no_merge_lora,
         **overrides,

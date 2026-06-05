@@ -186,6 +186,7 @@ def main() -> None:
                 model, val_native, labels=train_types,
                 label_aliases=label_aliases,
                 batch_size=cfg.per_device_eval_batch_size,
+                progress=True,
             )
             print(f"      tuned baseline threshold = {threshold} (val f1={best_m['f1']:.4f})")
         elif threshold is None:
@@ -204,6 +205,7 @@ def main() -> None:
             model, test_native, labels=train_types,
             label_aliases=label_aliases, threshold=threshold,
             batch_size=cfg.per_device_eval_batch_size,
+            progress=True,
         )
         zeroshot = {}
         if holdout_types:
@@ -211,6 +213,7 @@ def main() -> None:
                 model, test_native, labels=holdout_types,
                 label_aliases=label_aliases, threshold=threshold,
                 batch_size=cfg.per_device_eval_batch_size,
+                progress=True,
             )
 
     baseline = {

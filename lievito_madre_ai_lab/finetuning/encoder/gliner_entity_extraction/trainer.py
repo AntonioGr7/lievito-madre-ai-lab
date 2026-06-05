@@ -142,6 +142,7 @@ def build_trainer(
     train_types: list[str],
     early_stopping_patience: int | None = None,
     eval_threshold: float = 0.5,
+    monitor_zeroshot: bool = False,
 ):
     """Build a `gliner.training.Trainer` configured for this project."""
     # gliner_cfg fields end up on training_args (others_lr, focal_loss_alpha,
@@ -244,6 +245,8 @@ def build_trainer(
             train_types=train_types,
             threshold=eval_threshold,
             batch_size=training_args.per_device_eval_batch_size,
+            holdout_types=list(getattr(model.config, "holdout_types", []) or []),
+            monitor_zeroshot=monitor_zeroshot,
         )
     ]
     if early_stopping_patience and early_stopping_patience > 0:
