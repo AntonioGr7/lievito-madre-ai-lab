@@ -1,0 +1,29 @@
+# Byte-compiled
+__pycache__/
+*.py[codz]
+
+# Packaging
+build/
+dist/
+*.egg-info/
+*.egg
+
+# Virtualenvs
+.venv/
+venv/
+env/
+
+# Lab artifacts — never commit datasets or model weights
+data/*
+!data/.gitkeep
+outputs/
+
+# Experiment tracking & secrets
+wandb/
+.env
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage

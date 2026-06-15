@@ -1,0 +1,84 @@
+# Finance retrieval baseline — fine-tune an Ettin-68m bi-encoder on
+# FiQA-2018 train, with the aim of benchmarking against the RTEB-finance
+# English open subset (FinanceBench, HC3Finance, FinQA).
+#
+# Ettin (jhu-clsp/ettin-encoder-*) is a *raw* modern encoder backbone — its
+# model card does NOT specify any query/passage prefix protocol, and the
+# official fine-tuning example loads it as a plain SentenceTransformer.
+# Sentence-Transformers adds mean-pooling at load time; we train from
+# there. To upgrade to the 150m variant, change `model_name` and bump
+# `experiment_id`; every other knob is dimension-agnostic.
+#
+# Run:
+#   python examples/financial/dataset/prepare_fiqa.py
+#   python scripts/train_bi_encoder.py \
+#       --config examples/financial/fiqa/configs/fiqa_ettin68m.yaml
+#   python examples/financial/eval/eval_rteb_finance.py \
+#       --model-dir outputs/bi_encoder_fiqa_ettin68m/exp_01/final
+
+processed_dir: data/processed/fiqa-bi-encoder
+model_name: jhu-clsp/ettin-encoder-68m
+output_dir: outputs/bi_encoder_fiqa_ettin68m
+experiment_id: exp_01
+attn_implementation: sdpa
+
+num_train_epochs: 3                            # MNRL converges fast on ~17k pairs
+max_steps: -1
+# GradCache bounds peak memory by `mini_batch_size`, so this is the LOGICAL
+# batch (= in-batch-negative pool size). 256 is a strong baseline for FiQA
+# on a 24 GB GPU; drop to 128 if you OOM, or push to 512 on bigger GPUs.
+per_device_train_batch_size: 256
+per_device_eval_batch_size: 64
+gradient_accumulation_steps: 1                 # MNRL needs REAL big batches —
+                                               # accumulation does NOT add negatives
+learning_rate: 2e-5
+weight_decay: 0.01
+warmup_ratio: 0.1
+max_grad_norm: 1.0
+lr_scheduler_type: linear
+optim: adamw_torch_fused
+seed: 42
+
+eval_strategy: epoch
+save_strategy: epoch
+eval_steps: null
+save_steps: null
+load_best_model_at_end: true
+# Auto-resolved to `eval_validation_cosine_mrr@10` by the train script
+# (pair shape → InformationRetrievalEvaluator).
+metric_for_best_model: f1
+greater_is_better: true
+save_total_limit: 2
+early_stopping_patience: 2
+
+precision: auto                                # bf16 on Ampere+
+gradient_checkpointing: false
+torch_compile: false
+train_sampling_strategy: random                # ignored — see bi_encoder.batch_sampler
+dataloader_num_workers: 2
+pad_to_multiple_of: 8
+
+logging_steps: 50
+report_to: none
+
+wandb_project: null
+wandb_run_name: null
+wandb_tags: []
+wandb_notes: null
+
+# ─── Bi-encoder specific ──────────────────────────────────────────────────────
+bi_encoder:
+  loss:
+    name: MultipleNegativesRankingLoss
+    kwargs:
+      scale: 20.0                              # = 1 / temperature 0.05 — standard MNRL
+  batch_sampler: NO_DUPLICATES                 # two rows sharing an anchor never
+                                               # collide in the same MNRL batch
+  gradient_caching:
+    enabled: true
+    mini_batch_size: 32                        # largest chunk that fits without OOM
+  bidirectional:
+    enabled: false                             # leave off for the first baseline
+  matryoshka:
+    enabled: false                             # one dim for now; revisit after baseline
+  # No `prompts:` block — Ettin defines no prefix protocol (see header).

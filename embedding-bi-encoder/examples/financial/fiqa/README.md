@@ -1,0 +1,21 @@
+# FiQA Bi-Encoder
+
+Fine-tune an Ettin-68m bi-encoder on FiQA-2018 train, then benchmark against the RTEB-finance English open subset (FinanceBench, HC3Finance, FinQA). FiQA is NOT part of RTEB-finance, so training on it does not leak into the evaluation.
+
+## Run
+
+```bash
+bash examples/financial/fiqa/run.sh
+```
+
+Or step by step:
+
+```bash
+python examples/financial/dataset/prepare_fiqa.py
+python scripts/train_bi_encoder.py \
+    --config examples/financial/fiqa/configs/fiqa_ettin68m.yaml
+python examples/financial/eval/eval_rteb_finance.py \
+    --model-dir outputs/bi_encoder_fiqa_ettin68m/exp_01/final
+```
+
+To upgrade to the 150m Ettin variant, change `model_name` and bump `experiment_id` in [configs/fiqa_ettin68m.yaml](configs/fiqa_ettin68m.yaml); every other knob is dimension-agnostic.

@@ -1,0 +1,311 @@
+#!/usr/bin/env python
+"""Fine-tune a GLiNER model on a char-offset dataset.
+
+Usage
+-----
+python scripts/train_gliner.py \\
+    --config examples/pii/configs/pii_gliner.yaml
+
+# Resume from the latest checkpoint after a crash
+python scripts/train_gliner.py --config ... --resume
+
+# Smoke test on a small slice
+python scripts/train_gliner.py --config ... \\
+    --max-train-samples 200 --max-eval-samples 100 --max-test-samples 100
+"""
+import argparse
+import dataclasses
+import json
+from pathlib import Path
+
+import yaml
+from dotenv import load_dotenv
+
+load_dotenv()
+
+from gliner_entity_extraction.dataset import (
+    load_processed,
+    to_native_dataset,
+)
+from gliner_entity_extraction.evaluate import (
+    evaluate_split,
+    tune_threshold,
+)
+from gliner_entity_extraction.model import (
+    PeftConfig,
+    load_gliner,
+)
+from gliner_entity_extraction.trainer import (
+    GLiNERTrainCfg,
+    build_trainer,
+    build_training_args,
+)
+from gliner_entity_extraction.shared.config import (
+    TrainConfig,
+    compute_total_training_steps,
+)
+from gliner_entity_extraction.shared.preprocessing import (
+    load_preprocessing_meta,
+    save_preprocessing_meta,
+)
+
+
+def _load_config_with_gliner_block(path: str) -> tuple[TrainConfig, dict]:
+    """Split the GLiNER-specific block out so TrainConfig doesn't reject it."""
+    data = yaml.safe_load(Path(path).read_text())
+    gliner_cfg = data.pop("gliner", {}) or {}
+    return TrainConfig(**data), gliner_cfg
+
+
+def _build_gliner_objects(gliner_cfg: dict) -> tuple[GLiNERTrainCfg, PeftConfig, dict, dict, dict]:
+    """Pull the structured sub-dicts out of the raw YAML `gliner:` block."""
+    loss = gliner_cfg.get("loss", {}) or {}
+    sampling = gliner_cfg.get("sampling", {}) or {}
+    aliases = gliner_cfg.get("label_aliases", {}) or {}
+
+    peft_dict = gliner_cfg.get("peft", {}) or {}
+    peft_cfg = PeftConfig(
+        enabled=bool(peft_dict.get("enabled", False)),
+        r=int(peft_dict.get("r", 16)),
+        alpha=int(peft_dict.get("alpha", 32)),
+        dropout=float(peft_dict.get("dropout", 0.1)),
+        target_modules=peft_dict.get("target_modules", "auto"),
+    )
+
+    # Focal loss is opt-in via loss.funcs containing "focal". When enabled,
+    # forward the alpha/gamma onto GLiNERTrainCfg → TrainingArguments.
+    focal_on = "focal" in (loss.get("funcs") or [])
+
+    # `mean` divides the loss by the number of unmasked (span, type) cells,
+    # `sum` does not — under fp16 with many spans/types per chunk, `sum`
+    # produces gradients large enough to overflow the GradScaler. Default
+    # is kept as `sum` to preserve historical behaviour; switch to `mean`
+    # for fp16 stability (and retune LR up to compensate).
+    reduction = loss.get("reduction")
+    if reduction is not None and reduction not in {"mean", "sum"}:
+        raise ValueError(
+            f"gliner.loss.reduction must be 'mean' or 'sum'; got {reduction!r}"
+        )
+
+    # Sliding-window chunking of long training docs (word-token level). The
+    # YAML can pin chunk_max_words; if absent we let the trainer fall back to
+    # model.config.max_len so we never exceed the model's truncation cap.
+    chunk_cfg = gliner_cfg.get("chunking", {}) or {}
+    chunk_max_words = chunk_cfg.get("max_words")
+    chunk_stride = int(chunk_cfg.get("stride", 64))
+
+    cfg_kwargs = dict(
+        max_span_width=gliner_cfg.get("max_span_width"),
+        head_lr_multiplier=float(gliner_cfg.get("head_lr_multiplier", 5.0)),
+        focal_loss_alpha=float(loss.get("focal_alpha", 0.75)) if focal_on else -1.0,
+        focal_loss_gamma=float(loss.get("focal_gamma", 2.0)) if focal_on else 0.0,
+        chunk_max_words=int(chunk_max_words) if chunk_max_words is not None else None,
+        chunk_stride=chunk_stride,
+    )
+    if reduction is not None:
+        cfg_kwargs["loss_reduction"] = reduction
+    train_cfg = GLiNERTrainCfg(**cfg_kwargs)
+    return train_cfg, peft_cfg, loss, sampling, aliases
+
+
+def setup_wandb(cfg: TrainConfig) -> None:
+    if cfg.wandb_project is None:
+        return
+    import wandb
+    wandb.init(
+        project=cfg.wandb_project,
+        name=cfg.wandb_run_name,
+        tags=cfg.wandb_tags or None,
+        notes=cfg.wandb_notes,
+        config=dataclasses.asdict(cfg),
+    )
+
+
+def parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p.add_argument("--config", required=True)
+    p.add_argument("--resume", nargs="?", const=True, default=None, metavar="CHECKPOINT_DIR")
+    p.add_argument("--max-train-samples", type=int, default=None)
+    p.add_argument("--max-eval-samples", type=int, default=None)
+    p.add_argument("--max-test-samples", type=int, default=None)
+    return p.parse_args()
+
+
+def _truncate(datasets, args: argparse.Namespace) -> None:
+    limits = {
+        "train": args.max_train_samples,
+        "validation": args.max_eval_samples,
+        "test": args.max_test_samples,
+    }
+    for split, n in limits.items():
+        if n is not None and split in datasets:
+            datasets[split] = datasets[split].select(range(min(n, len(datasets[split]))))
+            print(f"      [smoke] {split}: truncated to {len(datasets[split])}")
+
+
+def main() -> None:
+    args = parse_args()
+    cfg, gliner_raw = _load_config_with_gliner_block(args.config)
+    setup_wandb(cfg)
+
+    print(f"[1/5] Loading processed dataset from {cfg.processed_dir} …")
+    datasets, train_types, holdout_types = load_processed(cfg.processed_dir)
+    _truncate(datasets, args)
+    print(datasets)
+    print(f"      train_types   ({len(train_types)}):   {train_types}")
+    print(f"      holdout_types ({len(holdout_types)}): {holdout_types}")
+
+    train_cfg, peft_cfg, loss_cfg, sampling_cfg, label_aliases = _build_gliner_objects(gliner_raw)
+
+    print(f"[2/5] Loading {cfg.model_name} (peft={peft_cfg.enabled}, "
+          f"max_span_width={train_cfg.max_span_width}) …")
+    model = load_gliner(
+        cfg.model_name,
+        train_types=train_types,
+        holdout_types=holdout_types,
+        max_span_width=train_cfg.max_span_width,
+        loss_cfg=loss_cfg,
+        sampling_cfg=sampling_cfg,
+        label_aliases=label_aliases,
+        peft_cfg=peft_cfg,
+        freeze_labels_encoder=bool(gliner_raw.get("freeze_labels_encoder", False)),
+    )
+
+    print("[3/5] Building trainer …")
+    total_steps = compute_total_training_steps(len(datasets["train"]), cfg)
+    training_args = build_training_args(cfg, num_training_steps=total_steps, gliner_cfg=train_cfg)
+    trainer = build_trainer(
+        model,
+        datasets,
+        training_args,
+        gliner_cfg=train_cfg,
+        train_types=train_types,
+        early_stopping_patience=cfg.early_stopping_patience,
+        monitor_zeroshot=bool(gliner_raw.get("monitor_zeroshot", False)),
+    )
+
+    print("[4/5] Training …")
+    trainer.train(resume_from_checkpoint=args.resume)
+
+    final_dir = Path(cfg.output_dir) / "final"
+    final_dir.mkdir(parents=True, exist_ok=True)
+
+    # Persist the model and preprocessing contract BEFORE running test eval.
+    # If we evaluated first, a crash mid-eval (bad sample, OOM, long span)
+    # would leave `final/` empty and the only recoverable artefact would be
+    # the last `checkpoint-N/` written by the Trainer.
+    model.save_pretrained(final_dir, safe_serialization=True)
+
+    # GLiNER's prep is tokenizer-agnostic — so unlike text/token classification
+    # the model_name and chunking config are decided here, at train time.
+    effective_max_words = (
+        train_cfg.chunk_max_words
+        if train_cfg.chunk_max_words is not None
+        else int(getattr(model.config, "max_len", 384))
+    )
+    native_max_words = effective_max_words if train_cfg.chunk_stride >= 0 else None
+
+    # Tune the decision threshold on validation before final eval. GLiNER's
+    # default 0.5 is rarely optimal; we pick the validation-optimal cutoff,
+    # report the final test numbers at it, and persist it so the predictor
+    # (serve.py) defaults to the same operating point. Falls back to 0.5 when
+    # there is no validation split to tune on. ``threshold_objective`` chooses
+    # f1 (balanced) or f2 (recall-weighted — recommended for PII/redaction).
+    threshold_objective = str(gliner_raw.get("threshold_objective", "f1"))
+    eval_threshold = 0.5
+    threshold_curve: list[dict] = []
+    if "validation" in datasets and len(datasets["validation"]):
+        val_for_tuning = to_native_dataset(
+            datasets["validation"],
+            model.data_processor.words_splitter,
+            max_words=native_max_words,
+            stride=train_cfg.chunk_stride,
+            desc="Chunking validation for threshold tuning",
+        )
+        eval_threshold, best_m, threshold_curve = tune_threshold(
+            model, val_for_tuning, labels=train_types,
+            label_aliases=label_aliases,
+            batch_size=cfg.per_device_eval_batch_size,
+            objective=threshold_objective,
+            progress=True,
+        )
+        print(
+            f"      tuned decision threshold = {eval_threshold} "
+            f"(objective={threshold_objective}; val f1={best_m['f1']:.4f} "
+            f"f2={best_m['f2']:.4f} P={best_m['precision']:.4f} R={best_m['recall']:.4f})"
+        )
+
+    prep_meta = load_preprocessing_meta(cfg.processed_dir) or {}
+    # Merge into one dict (not **prep_meta + explicit kwargs) so the train-time
+    # values *override* the prep-time ones: the prep scripts already write
+    # train_types/holdout_types into preprocessing.json, and `f(**d, train_types=...)`
+    # with the key in both `d` and the call would raise "multiple values".
+    meta_out = {
+        **prep_meta,            # carry over anything the prep script recorded
+        "tokenizer": cfg.model_name,
+        "max_words": effective_max_words,
+        "stride": train_cfg.chunk_stride if train_cfg.chunk_stride >= 0 else None,
+        "threshold": eval_threshold,
+        "train_types": train_types,
+        "holdout_types": holdout_types,
+    }
+    save_preprocessing_meta(final_dir, **meta_out)
+    print(
+        f"      preprocessing.json written to {final_dir} "
+        f"(max_words={effective_max_words}, "
+        f"stride={train_cfg.chunk_stride if train_cfg.chunk_stride >= 0 else 'off'}, "
+        f"threshold={eval_threshold})"
+    )
+    print(f"Model saved -> {final_dir}")
+
+    print("[5/5] Final evaluation on the test split (model already saved) …")
+    metrics: dict = {"tuned_threshold": eval_threshold, "threshold_objective": threshold_objective}
+    if threshold_curve:
+        metrics["threshold_curve"] = threshold_curve
+    if "test" in datasets:
+        # Mirror the same chunking the trainer used so final test f1 is
+        # computed on the same units that ``eval_f1`` tracked during training.
+        test_for_eval = to_native_dataset(
+            datasets["test"],
+            model.data_processor.words_splitter,
+            max_words=native_max_words,
+            stride=train_cfg.chunk_stride,
+            desc="Chunking test for final evaluation",
+        )
+
+        closed = evaluate_split(
+            model, test_for_eval, labels=train_types,
+            label_aliases=label_aliases,
+            threshold=eval_threshold,
+            batch_size=cfg.per_device_eval_batch_size,
+            progress=True,
+        )
+        for k, v in closed.items():
+            metrics[f"test_closed_{k}"] = v
+        print(json.dumps(
+            {k: v for k, v in metrics.items() if k.startswith("test_closed_")},
+            indent=2,
+        ))
+
+        if holdout_types:
+            zero = evaluate_split(
+                model, test_for_eval, labels=holdout_types,
+                label_aliases=label_aliases,
+                threshold=eval_threshold,
+                batch_size=cfg.per_device_eval_batch_size,
+                progress=True,
+            )
+            for k, v in zero.items():
+                metrics[f"test_zeroshot_{k}"] = v
+            print(json.dumps(
+                {k: v for k, v in metrics.items() if k.startswith("test_zeroshot_")},
+                indent=2,
+            ))
+
+    (final_dir / "test_metrics.json").write_text(json.dumps(metrics, indent=2))
+
+
+if __name__ == "__main__":
+    main()
