@@ -18,6 +18,7 @@ deliberately isolated; GLiNER in particular pins an older `transformers` than th
 | [gliner-entity-extraction/](gliner-entity-extraction/) | Fine-tuning GLiNER for open-vocabulary / zero-shot entity extraction. |
 | [embedding-bi-encoder/](embedding-bi-encoder/) | Bi-encoder fine-tuning for semantic search (sentence-transformers), with mining + distillation. |
 | [vlm-finetuning/](vlm-finetuning/) | LoRA/QLoRA fine-tuning of vision-language models (image→text SFT): free-form targets (tool calls, JSON) or grounding (labels + `<box>` coordinate tokens). |
+| [object-detection/](object-detection/) | Fine-tuning canonical DETR-family detectors (D-FINE, RT-DETRv2, …) with COCO mAP eval, discriminative LR, and weight EMA. |
 
 Future use cases (LLM fine-tuning, …) get added the same way: a new top-level
 project directory with its own `setup.py`.

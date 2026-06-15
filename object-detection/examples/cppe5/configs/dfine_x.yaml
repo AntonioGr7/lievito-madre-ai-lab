@@ -1,0 +1,62 @@
+# Fine-tune D-FINE-X (Objects365->COCO pretrained) on CPPE-5.
+# Best COCO AP among canonical detectors in HF transformers. Target: A100 (40/80GB).
+# If the checkpoint id 404s, check the ustc-community org on the Hub for the
+# current slug (e.g. dfine-large-obj2coco / dfine-xlarge-coco).
+processed_dir: data/processed/cppe5
+model_name: ustc-community/dfine-xlarge-obj2coco
+output_dir: outputs/cppe5_dfine_x
+experiment_id: run1
+
+num_train_epochs: 50
+max_steps: -1
+per_device_train_batch_size: 4
+per_device_eval_batch_size: 8
+gradient_accumulation_steps: 4          # effective batch = 16
+learning_rate: 1e-4
+weight_decay: 1e-4
+warmup_ratio: 0.03
+max_grad_norm: 0.1                       # DETR-family train stably with tight clipping
+lr_scheduler_type: cosine
+optim: adamw_torch_fused
+seed: 42
+
+eval_strategy: epoch
+save_strategy: epoch
+load_best_model_at_end: true
+metric_for_best_model: map               # the eval callback publishes eval_map
+greater_is_better: true
+save_total_limit: 2
+early_stopping_patience: 8
+
+precision: auto                          # bf16 + tf32 on A100
+gradient_checkpointing: false            # plenty of VRAM on A100; turn on if memory-bound
+torch_compile: false
+dataloader_num_workers: 8
+
+logging_steps: 25
+report_to: "none"                        # set "wandb" + wandb_project to track
+
+wandb_project: null
+wandb_run_name: null
+wandb_tags: []
+wandb_notes: null
+
+detection:
+  image_size: 640                        # square resize fed to the model
+  freeze_backbone: false
+  backbone_lr_mult: 0.1                  # backbone LR = learning_rate * this (canonical)
+  score_threshold: 0.3                   # serve-time default cutoff (saved to preprocessing.json)
+
+  augmentation:
+    enabled: true
+    hflip: 0.5
+    brightness_contrast: 0.5
+    hue_sat: 0.3
+
+  ema:
+    enabled: true                        # weight EMA -> +0.5-1.5 AP, swapped in for eval+save
+    decay: 0.9997
+
+  eval:
+    threshold: 0.0                       # keep all queries for mAP integration
+    max_samples: null                    # full val split each epoch

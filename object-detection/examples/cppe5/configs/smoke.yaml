@@ -1,0 +1,52 @@
+# Smoke config — tiny synthetic fixture, runs end-to-end on CPU.
+# Uses the smallest reliable detector so the full load -> head-swap -> train ->
+# mAP-eval -> save path is exercised without a GPU or a large download.
+processed_dir: tests/fixtures/coco_tiny
+model_name: hustvl/yolos-tiny
+output_dir: outputs/_smoke
+experiment_id: smoke
+
+num_train_epochs: 1
+max_steps: -1
+per_device_train_batch_size: 1
+per_device_eval_batch_size: 1
+gradient_accumulation_steps: 1
+learning_rate: 5e-5
+weight_decay: 1e-4
+warmup_ratio: 0.0
+max_grad_norm: 0.1
+lr_scheduler_type: constant
+optim: adamw_torch
+seed: 42
+
+eval_strategy: epoch
+save_strategy: epoch
+load_best_model_at_end: false
+metric_for_best_model: map
+greater_is_better: true
+save_total_limit: 1
+early_stopping_patience: null
+
+precision: fp32
+gradient_checkpointing: false
+torch_compile: false
+dataloader_num_workers: 0
+
+logging_steps: 1
+report_to: "none"
+
+detection:
+  image_size: null                       # use the processor default
+  freeze_backbone: false
+  backbone_lr_mult: 0.1
+  score_threshold: 0.3
+  augmentation:
+    enabled: true
+    hflip: 0.5
+    brightness_contrast: 0.0
+    hue_sat: 0.0
+  ema:
+    enabled: false                        # skip EMA for a fast smoke
+  eval:
+    threshold: 0.0
+    max_samples: 2

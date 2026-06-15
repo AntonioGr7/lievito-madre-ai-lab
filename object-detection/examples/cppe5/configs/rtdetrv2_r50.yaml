@@ -1,0 +1,52 @@
+# Fine-tune RT-DETRv2-R50 on CPPE-5 — the rock-solid SOTA fallback.
+# Slightly lower AP than D-FINE-X but a battle-tested, always-available checkpoint.
+processed_dir: data/processed/cppe5
+model_name: PekingU/rtdetr_v2_r50vd
+output_dir: outputs/cppe5_rtdetrv2
+experiment_id: run1
+
+num_train_epochs: 60
+max_steps: -1
+per_device_train_batch_size: 8
+per_device_eval_batch_size: 16
+gradient_accumulation_steps: 2          # effective batch = 16
+learning_rate: 1e-4
+weight_decay: 1e-4
+warmup_ratio: 0.03
+max_grad_norm: 0.1
+lr_scheduler_type: cosine
+optim: adamw_torch_fused
+seed: 42
+
+eval_strategy: epoch
+save_strategy: epoch
+load_best_model_at_end: true
+metric_for_best_model: map
+greater_is_better: true
+save_total_limit: 2
+early_stopping_patience: 10
+
+precision: auto
+gradient_checkpointing: false
+torch_compile: false
+dataloader_num_workers: 8
+
+logging_steps: 25
+report_to: "none"
+
+detection:
+  image_size: 640
+  freeze_backbone: false
+  backbone_lr_mult: 0.1
+  score_threshold: 0.3
+  augmentation:
+    enabled: true
+    hflip: 0.5
+    brightness_contrast: 0.5
+    hue_sat: 0.3
+  ema:
+    enabled: true
+    decay: 0.9997
+  eval:
+    threshold: 0.0
+    max_samples: null
