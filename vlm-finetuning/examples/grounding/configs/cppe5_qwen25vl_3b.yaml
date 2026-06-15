@@ -1,0 +1,67 @@
+# LoRA fine-tune of Qwen2.5-VL-3B on CPPE-5 (box grounding).
+# Target: a single 24GB GPU (A10 / RTX 3090/4090) or better. bf16 on Ampere+.
+processed_dir: data/processed/cppe5
+model_name: Qwen/Qwen2.5-VL-3B-Instruct
+output_dir: outputs/cppe5_qwen25vl_3b
+experiment_id: lora_r16
+
+num_train_epochs: 5
+max_steps: -1
+per_device_train_batch_size: 2
+per_device_eval_batch_size: 4
+gradient_accumulation_steps: 8          # effective batch = 16
+learning_rate: 1e-4
+weight_decay: 0.01
+warmup_ratio: 0.03
+max_grad_norm: 1.0
+lr_scheduler_type: cosine
+optim: adamw_torch_fused
+seed: 42
+
+eval_strategy: epoch
+save_strategy: epoch
+load_best_model_at_end: true
+metric_for_best_model: f1               # the eval callback publishes eval_f1
+greater_is_better: true
+save_total_limit: 2
+early_stopping_patience: 2
+
+precision: auto                         # bf16 + tf32 on Ampere+
+gradient_checkpointing: true
+torch_compile: false
+dataloader_num_workers: 4
+
+logging_steps: 10
+report_to: "none"                       # set to "wandb" + wandb_project to track
+
+wandb_project: null
+wandb_run_name: null
+wandb_tags: []
+wandb_notes: null
+
+vlm:
+  task: box                             # "box" | "point"
+  coord_bins: 1000                      # <box> integer grid resolution
+  max_length: 2048
+  freeze_vision_tower: true             # adapt the LM only — cheaper, more stable
+  add_coord_special_tokens: false       # plain-text <box> tokens (no vocab surgery)
+
+  # Bound Qwen's dynamic-resolution image tokens. 256*28*28 ≈ 200k px ceiling
+  # keeps memory sane; raise for tiny objects, lower if you OOM.
+  image_min_pixels: 200704              # 256 * 28 * 28
+  image_max_pixels: 1003520             # 1280 * 28 * 28
+
+  eval:
+    max_new_tokens: 512
+    iou_threshold: 0.5
+    max_samples: 200                    # cap eval-time generation; null = full split
+
+  lora:
+    enabled: true
+    r: 16                               # 16 is the "first try" default; bump to 32/64 if underfit
+    alpha: 32                           # scaling = alpha / r
+    dropout: 0.05
+    target_modules: auto                # LM attention+MLP projections; vision stays frozen
+
+  quant:
+    load_in_4bit: false                 # see *_qlora.yaml for the 4-bit (T4) variant

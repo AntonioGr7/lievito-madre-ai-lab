@@ -17,8 +17,9 @@ deliberately isolated; GLiNER in particular pins an older `transformers` than th
 | [token-classification/](token-classification/) | Encoder fine-tuning for token classification / NER (incl. a PII corpus builder). |
 | [gliner-entity-extraction/](gliner-entity-extraction/) | Fine-tuning GLiNER for open-vocabulary / zero-shot entity extraction. |
 | [embedding-bi-encoder/](embedding-bi-encoder/) | Bi-encoder fine-tuning for semantic search (sentence-transformers), with mining + distillation. |
+| [vlm-finetuning/](vlm-finetuning/) | LoRA/QLoRA fine-tuning of vision-language models (image→text SFT): free-form targets (tool calls, JSON) or grounding (labels + `<box>` coordinate tokens). |
 
-Future use cases (VLM fine-tuning, LLM fine-tuning, …) get added the same way: a new top-level
+Future use cases (LLM fine-tuning, …) get added the same way: a new top-level
 project directory with its own `setup.py`.
 
 ## Utilities (`utils/`)
