@@ -1,10 +1,11 @@
-# Smoke config — pointed at the tiny fixture, runs end-to-end on CPU.
-# Uses the smallest real VLM so the full load → LoRA → train → generate-eval
-# path is exercised without a GPU.
-processed_dir: tests/fixtures/vlm_tiny
+# Smoke config — generic free-text (task: text) path on the tiny fixture.
+# Exercises the full load -> LoRA -> train -> generate-eval path for the
+# image->free-form-string contract (scored by exact-match / token-F1), with the
+# smallest real VLM so it runs end-to-end on CPU without a large download.
+processed_dir: tests/fixtures/vlm_text_tiny
 model_name: HuggingFaceTB/SmolVLM-256M-Instruct
-output_dir: outputs/_smoke
-experiment_id: smoke
+output_dir: outputs/_smoke_text
+experiment_id: smoke_text
 
 num_train_epochs: 1
 max_steps: -1
@@ -22,7 +23,7 @@ seed: 42
 eval_strategy: epoch
 save_strategy: epoch
 load_best_model_at_end: false
-metric_for_best_model: eval_f1
+metric_for_best_model: eval_token_f1
 greater_is_better: true
 save_total_limit: 1
 early_stopping_patience: null
@@ -36,16 +37,13 @@ logging_steps: 1
 report_to: "none"
 
 vlm:
-  task: box
-  coord_bins: 1000
+  task: text
   max_length: 1536                        # SmolVLM tiles a single image into ~1196 tokens;
                                           # must exceed that or truncation slices the image
                                           # span and the Idefics3 processor crashes (tfm 5.x).
   freeze_vision_tower: true
-  add_coord_special_tokens: false
   eval:
-    max_new_tokens: 64
-    iou_threshold: 0.5
+    max_new_tokens: 32
     max_samples: 2
   lora:
     enabled: true

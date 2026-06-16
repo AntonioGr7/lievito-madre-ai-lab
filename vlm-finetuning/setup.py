@@ -6,12 +6,13 @@ from setuptools import setup, find_packages
 # Then: pip install -e ".[dev]"
 #
 # This project fine-tunes vision-language models (Qwen2.5-VL, SmolVLM/Idefics3,
-# LLaVA, …) with LoRA / QLoRA. It needs a recent `transformers` (Qwen2.5-VL
-# landed in 4.49), so it is incompatible with the GLiNER project's pinned
-# `transformers<5.2.0`. Install it in its own virtualenv.
+# LLaVA, …) with LoRA / QLoRA. It targets `transformers` 5.x (validated on
+# 5.12.1; the 5.x Idefics3/Qwen-VL processors are what the collator expects),
+# so it is incompatible with the GLiNER project's pinned `transformers<5.2.0`.
+# Install it in its own virtualenv.
 
 install_requires = [
-    "transformers>=4.49.0",
+    "transformers>=5.0.0",
     "datasets>=2.19.0",
     "accelerate>=0.30.0",
     "peft>=0.11.0",          # LoRA / QLoRA adapters

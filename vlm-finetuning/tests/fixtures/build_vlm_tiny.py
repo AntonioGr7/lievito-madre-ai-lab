@@ -67,11 +67,15 @@ def main() -> None:
     features = Features({
         "image": Image(),
         "prompt": Value("string"),
-        "objects": Sequence({
+        # A variable-length list of structs (one dict per object). Use the
+        # list-of-feature form `[{...}]`, NOT `Sequence({...})`: Sequence of a
+        # dict transposes to a struct-of-arrays (dict-of-lists), but the loader
+        # iterates `row["objects"]` expecting a list of dicts.
+        "objects": [{
             "label": Value("string"),
             "box": Sequence(Value("float32")),
             "point": Sequence(Value("float32")),
-        }),
+        }],
     })
     ds = DatasetDict({
         "train": Dataset.from_dict(_rows(_SPECS[:6]), features=features),

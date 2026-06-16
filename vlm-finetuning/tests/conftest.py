@@ -1,29 +1,42 @@
 """Shared pytest fixtures.
 
-The tiny grounding dataset under ``tests/fixtures/vlm_tiny/`` is generated
-output, not committed source — it is rebuilt on demand from
-``tests/fixtures/build_vlm_tiny.py``. The ``vlm_tiny_path`` fixture below builds
-it if missing, so a fresh clone runs the smoke test with no extra step. The
-build is lazy: ``test_smoke`` is gated behind ``RUN_VLM_SMOKE=1``, and pytest
-only sets up a fixture for tests that actually run, so the normal (fast) suite
-never imports ``datasets`` or touches the fixture.
+The tiny datasets under ``tests/fixtures/`` are generated output, not committed
+source — each is rebuilt on demand from its ``tests/fixtures/build_*.py`` script.
+The ``*_path`` fixtures below build them if missing, so a fresh clone runs the
+smoke tests with no extra step. The build is lazy: ``test_smoke`` is gated behind
+``RUN_VLM_SMOKE=1``, and pytest only sets up a fixture for tests that actually
+run, so the normal (fast) suite never imports ``datasets`` or touches a fixture.
+
+- ``vlm_tiny`` — grounding (boxes), built by ``build_vlm_tiny.py``.
+- ``vlm_text_tiny`` — generic free-text SFT, built by ``build_vlm_text_tiny.py``.
 """
+import importlib.util
 from pathlib import Path
 
 import pytest
 
-FIXTURE_DIR = Path(__file__).parent / "fixtures" / "vlm_tiny"
+FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def _build_if_absent(name: str) -> Path:
+    """Path to a generated fixture dir, running its build_<name>.py if absent."""
+    fixture_dir = FIXTURES / name
+    if not (fixture_dir / "dataset_dict.json").exists():
+        builder = FIXTURES / f"build_{name}.py"
+        spec = importlib.util.spec_from_file_location(f"build_{name}", builder)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        module.main()
+    return fixture_dir
 
 
 @pytest.fixture(scope="session")
 def vlm_tiny_path() -> Path:
     """Path to the tiny grounding DatasetDict, building it on first use if absent."""
-    if not (FIXTURE_DIR / "dataset_dict.json").exists():
-        import importlib.util
+    return _build_if_absent("vlm_tiny")
 
-        builder = Path(__file__).parent / "fixtures" / "build_vlm_tiny.py"
-        spec = importlib.util.spec_from_file_location("build_vlm_tiny", builder)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        module.main()
-    return FIXTURE_DIR
+
+@pytest.fixture(scope="session")
+def vlm_text_tiny_path() -> Path:
+    """Path to the tiny free-text DatasetDict, building it on first use if absent."""
+    return _build_if_absent("vlm_text_tiny")

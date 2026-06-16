@@ -18,10 +18,11 @@ data/*
 !data/.gitkeep
 outputs/
 
-# Test fixture is generated from tests/fixtures/build_vlm_tiny.py
+# Test fixtures are generated from tests/fixtures/build_*.py
 # (auto-built on demand by tests/conftest.py), so the image/Arrow blobs
-# are not committed.
-tests/fixtures/vlm_tiny/
+# are never committed — only the builder scripts are. Ignore every generated
+# fixture subdir; the .py builders at the fixtures root stay tracked.
+tests/fixtures/*/
 
 # Experiment tracking & secrets
 wandb/
